@@ -1,0 +1,49 @@
+name: supython-test
+
+# Dedicated Postgres for the pytest suite, isolated from the dev stack:
+#   * different compose project name → never fights `supython up`
+#   * different host port (54323 vs 54322) → both can run side-by-side
+#   * same custom image as dev (./docker/postgres) → pg_cron available
+#   * persistent named volume → migrations survive between runs;
+#     `supython test reset` blows it away when you want a clean slate.
+
+services:
+  db:
+    build: ./docker/postgres
+    container_name: supython-test-db
+    environment:
+      POSTGRES_USER: supython
+      POSTGRES_PASSWORD: supython
+      POSTGRES_DB: supython
+    ports:
+      - "54323:5432"
+    volumes:
+      - supython-test-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supython -d supython"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: supython-test-postgrest
+    profiles: ["e2e"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator}@db:5432/supython
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: "@/etc/postgrest/jwks.json"
+      PGRST_JWT_AUD: authenticated
+      PGRST_OPENAPI_MODE: ignore-privileges
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    ports:
+      - "54324:3000"
+    volumes:
+      - ./.supython/jwks.json:/etc/postgrest/jwks.json:ro
+
+volumes:
+  supython-test-db-data:

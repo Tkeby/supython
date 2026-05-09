@@ -1,0 +1,89 @@
+# End-to-end demo: a working todos backend with ZERO Python CRUD code.
+#
+# - Auth lives in the supython service (port 8000).
+# - All todo CRUD is served directly by PostgREST (port 54321), gated by RLS.
+#
+# Usage with curl below; this file is also compatible with the JetBrains /
+# REST-Client style runners if you adapt the @variables.
+
+###############################################################################
+# 1. Sign up. The response includes an access_token (JWT) and refresh_token.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/signup \
+  -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"password123"}'
+
+###############################################################################
+# 2. (or) Sign in with password. Same shape as signup.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/token \
+   -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"password123"}'
+
+###############################################################################
+# Stash the access_token; we'll send it to PostgREST as a bearer token.
+###############################################################################
+  
+
+###############################################################################
+# 3. Create a todo. user_id defaults to auth.uid() — no need to send it.
+###############################################################################
+ curl -sS -X POST http://localhost:54321/todos \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/json' \
+   -H 'prefer: return=representation' \
+   -d '{"title":"buy milk"}'
+
+###############################################################################
+# 4. List todos. RLS guarantees you only see your own rows.
+###############################################################################
+ curl -sS http://localhost:54321/todos \
+   -H "authorization: Bearer $TOKEN"
+
+###############################################################################
+# 5. Filter & sort using PostgREST query syntax.
+###############################################################################
+ curl -sS "http://localhost:54321/todos?done=eq.false&order=created_at.desc" \
+   -H "authorization: Bearer $TOKEN"
+
+###############################################################################
+# 6. Mark a todo done. Use ?id=eq.<uuid> to target it.
+###############################################################################
+ curl -sS -X PATCH "http://localhost:54321/todos?id=eq.<UUID>" \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/json' \
+   -d '{"done":true}'
+
+###############################################################################
+# 7. Delete a todo.
+###############################################################################
+ curl -sS -X DELETE "http://localhost:54321/todos?id=eq.<UUID>" \
+   -H "authorization: Bearer $TOKEN"
+
+###############################################################################
+# 8. Verify isolation: sign up a second user, list todos — empty array.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/signup \
+   -H 'content-type: application/json' \
+   -d '{"email":"bob@example.com","password":"password123"}'
+
+###############################################################################
+# 9. Refresh the access token without re-entering the password.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/refresh \
+   -H 'content-type: application/json' \
+   -d '{"refresh_token":"<REFRESH>"}'
+
+###############################################################################
+# 10. Whoami — verifies the JWT round-trip in supython itself.
+###############################################################################
+ curl -sS http://localhost:8000/auth/v1/user \
+   -H "authorization: Bearer $TOKEN"
+
+
+###############################################################################
+# 10. Magic lik — .
+###############################################################################
+ curl -sS http://localhost:8000/auth/v1/magiclink \
+   -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"changeme1234"}'

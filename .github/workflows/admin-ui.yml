@@ -1,0 +1,61 @@
+name: Admin UI
+
+on:
+  push:
+    paths:
+      - admin-ui/**
+      - src/supython/admin/**
+  pull_request:
+    paths:
+      - admin-ui/**
+      - src/supython/admin/**
+
+jobs:
+  stale-bundle-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-ui
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Check for stale committed bundle
+        run: git diff --quiet ../src/supython/admin/static
+
+  bundle-size:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-ui
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Check initial-shell gzip size (cap 500 KB)
+        run: npm run size-check
+
+  vitest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-ui
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+      - run: npm ci
+      - run: npm test

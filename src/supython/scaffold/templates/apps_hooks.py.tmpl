@@ -1,0 +1,11 @@
+"""Auth hooks for {name}."""
+from supython.hooks import on
+
+
+@on("signup")
+async def welcome(user, ctx) -> None:
+    await ctx.send_email(
+        to=user.email,
+        subject="Welcome to {name}",
+        text="Thanks for signing up.",
+    )

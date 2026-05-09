@@ -1,0 +1,30 @@
+### Jobs API walkthrough
+### Requires: supython up && supython dev
+
+### Enqueue a job (service_role JWT required)
+POST http://localhost:8000/jobs/v1/enqueue
+Content-Type: application/json
+Authorization: Bearer {{service_role_token}}
+
+{
+    "name": "send_welcome_email",
+    "payload": {"user_id": "some-uuid"},
+    "queue": "default",
+    "max_attempts": 5
+}
+
+### List all jobs
+GET http://localhost:8000/jobs/v1/jobs
+Authorization: Bearer {{service_role_token}}
+
+### Get a specific job
+GET http://localhost:8000/jobs/v1/jobs/{{job_id}}
+Authorization: Bearer {{service_role_token}}
+
+### Cancel a job
+POST http://localhost:8000/jobs/v1/jobs/{{job_id}}/cancel
+Authorization: Bearer {{service_role_token}}
+
+### Retry a failed job
+POST http://localhost:8000/jobs/v1/jobs/{{job_id}}/retry
+Authorization: Bearer {{service_role_token}}

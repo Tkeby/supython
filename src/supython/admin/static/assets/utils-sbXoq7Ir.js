@@ -1,0 +1,2 @@
+import{Cn as e}from"./Space-n5-XcguU.js";var t=[],n=new WeakMap;function r(){t.forEach(e=>e(...n.get(e))),t=[]}function i(e,...i){n.set(e,i),!t.includes(e)&&t.push(e)===1&&requestAnimationFrame(r)}function a(){return e()!==null}var o=typeof window<`u`;export{o as n,i as r,a as t};
+//# sourceMappingURL=utils-sbXoq7Ir.js.map

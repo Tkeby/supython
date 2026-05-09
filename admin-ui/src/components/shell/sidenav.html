@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>supython - Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&amp;family=Manrope:wght@600;700&amp;family=Space+Grotesk:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-background": "#0F172A",
+                        "on-secondary-container": "#5b3800",
+                        "on-primary-fixed": "#002113",
+                        "status-warning": "#F59E0B",
+                        "on-tertiary-container": "#711419",
+                        "inverse-on-surface": "#2b322d",
+                        "role-authenticated": "#3B82F6",
+                        "on-tertiary": "#650911",
+                        "surface": "#0e1511",
+                        "surface-bright": "#343b36",
+                        "role-service": "#EF4444",
+                        "primary-fixed": "#6ffbbe",
+                        "on-tertiary-fixed-variant": "#842225",
+                        "primary-fixed-dim": "#4edea3",
+                        "surface-border": "#334155",
+                        "status-disabled": "#4B5563",
+                        "surface-variant": "#2f3632",
+                        "on-tertiary-fixed": "#410005",
+                        "tertiary": "#ffb3af",
+                        "role-anon": "#6B7280",
+                        "tertiary-fixed": "#ffdad7",
+                        "surface-dim": "#0e1511",
+                        "error": "#ffb4ab",
+                        "surface-container-highest": "#2f3632",
+                        "inverse-surface": "#dde4dd",
+                        "on-primary-container": "#00422b",
+                        "surface-container-high": "#242c27",
+                        "on-secondary-fixed-variant": "#653e00",
+                        "error-container": "#93000a",
+                        "surface-container-lowest": "#09100c",
+                        "status-healthy": "#10B981",
+                        "on-secondary-fixed": "#2a1700",
+                        "on-primary-fixed-variant": "#005236",
+                        "primary": "#4edea3",
+                        "outline-variant": "#3c4a42",
+                        "outline": "#86948a",
+                        "primary-container": "#10b981",
+                        "secondary": "#ffb95f",
+                        "tertiary-container": "#fc7c78",
+                        "surface-container-low": "#161d19",
+                        "on-surface-variant": "#bbcabf",
+                        "on-error-container": "#ffdad6",
+                        "background": "#0e1511",
+                        "surface-tint": "#4edea3",
+                        "on-error": "#690005",
+                        "secondary-fixed-dim": "#ffb95f",
+                        "secondary-container": "#ee9800",
+                        "status-unhealthy": "#EF4444",
+                        "surface-card": "#1E293B",
+                        "on-secondary": "#472a00",
+                        "on-surface": "#dde4dd",
+                        "secondary-fixed": "#ffddb8",
+                        "surface-container": "#1a211d",
+                        "inverse-primary": "#006c49",
+                        "tertiary-fixed-dim": "#ffb3af",
+                        "on-primary": "#003824",
+                        "on-background": "#dde4dd"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "sidebar-collapsed": "64px",
+                        "sidebar-width": "240px",
+                        "topbar-height": "56px",
+                        "table-row-height": "40px",
+                        "gutter": "1rem",
+                        "drawer-width": "480px"
+                    },
+                    "fontFamily": {
+                        "mono-code": ["Space Grotesk"],
+                        "body-base": ["Inter"],
+                        "headline-md": ["Manrope"],
+                        "body-sm": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "headline-lg": ["Manrope"]
+                    },
+                    "fontSize": {
+                        "mono-code": ["13px", { "lineHeight": "18px", "fontWeight": "400" }],
+                        "body-base": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-md": ["18px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "body-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "headline-lg": ["24px", { "lineHeight": "32px", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { background-color: theme('colors.surface-background'); color: theme('colors.on-surface'); }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex overflow-hidden">
+<!-- SideNavBar -->
+<nav class="docked left-0 h-full w-64 border-r border-slate-800 flat no shadows fixed left-0 top-0 h-full flex flex-col pt-14 z-40 bg-slate-950">
+<div class="px-4 py-4 flex items-center gap-3 border-b border-slate-800">
+<img alt="Project Logo" class="w-8 h-8 rounded" data-alt="A small, stylized operator console logo. High tech, minimal, neon green lines on a dark background. Cyberpunk and modern corporate aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDBNFcA1DQvnyFX5h6Gr5elr_QXdEdxbAQXJe6T-eKekE8o0m7ChzCgJxH5RgIO5wbKkeo3mEYd-l17fzCAGASV9zdwlntLNk12OVk8g66p-5c_llyyAHFyBqqzeziLzir8lUjEHunf8NjjL_cKL8HEwVLxoB9d-Ey2XEIYMlEQctkbS-cC_3YZrBxZK4fXZIAcQ3-7ot8Dur2P6NTO_tnsqVJMlFKH4l7YCbkQg9qhk8W_k0sng6WYUAjbpuHii3pqDZ2HCa0doSE"/>
+<div>
+<div class="text-emerald-500 font-black font-manrope text-[13px] uppercase tracking-widest font-bold">supython</div>
+<div class="text-[11px] text-slate-500 font-manrope text-[13px] uppercase tracking-widest font-bold">Operator Console</div>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto py-2">
+<a class="bg-emerald-500/10 text-emerald-400 border-r-2 border-emerald-500 flex items-center px-4 py-3 font-manrope text-[13px] uppercase tracking-widest font-bold transition-colors duration-75" href="#">
+<span class="material-symbols-outlined mr-3">database</span>
+                Database
+            </a>
+<a class="text-slate-500 flex items-center px-4 py-3 font-manrope text-[13px] uppercase tracking-widest font-bold hover:bg-slate-900 hover:text-slate-200 transition-colors duration-75" href="#">
+<span class="material-symbols-outlined mr-3">lock</span>
+                Authentication
+            </a>
+<a class="text-slate-500 flex items-center px-4 py-3 font-manrope text-[13px] uppercase tracking-widest font-bold hover:bg-slate-900 hover:text-slate-200 transition-colors duration-75" href="#">
+<span class="material-symbols-outlined mr-3">folder_shared</span>
+                Storage
+            </a>
+<a class="text-slate-500 flex items-center px-4 py-3 font-manrope text-[13px] uppercase tracking-widest font-bold hover:bg-slate-900 hover:text-slate-200 transition-colors duration-75" href="#">
+<span class="material-symbols-outlined mr-3">terminal</span>
+                Edge Functions
+            </a>
+<a class="text-slate-500 flex items-center px-4 py-3 font-manrope text-[13px] uppercase tracking-widest font-bold hover:bg-slate-900 hover:text-slate-200 transition-colors duration-75" href="#">
+<span class="material-symbols-outlined mr-3">code</span>
+                SQL Editor
+            </a>
+<a class="text-slate-500 flex items-center px-4 py-3 font-manrope text-[13px] uppercase tracking-widest font-bold hover:bg-slate-900 hover:text-slate-200 transition-colors duration-75" href="#">
+<span class="material-symbols-outlined mr-3">settings</span>
+                Settings
+            </a>
+</div>
+<div class="mt-auto border-t border-slate-800 py-2">
+<a class="text-slate-500 flex items-center px-4 py-3 font-manrope text-[13px] uppercase tracking-widest font-bold hover:bg-slate-900 hover:text-slate-200 transition-colors duration-75" href="#">
+<span class="material-symbols-outlined mr-3">menu_book</span>
+                Docs
+            </a>
+<a class="text-slate-500 flex items-center px-4 py-3 font-manrope text-[13px] uppercase tracking-widest font-bold hover:bg-slate-900 hover:text-slate-200 transition-colors duration-75" href="#">
+<span class="material-symbols-outlined mr-3">support_agent</span>
+                Support
+            </a>
+</div>
+</nav>
+<!-- Main Content Area -->
+<div class="flex-1 flex flex-col pl-64 w-full h-full">
+<!-- TopNavBar -->
+<header class="flex justify-between items-center h-14 px-4 w-full z-50 bg-slate-900 docked full-width top-0 border-b border-slate-800 flat no shadows">
+<div class="flex items-center gap-4">
+<div class="text-xl font-bold tracking-tighter text-emerald-500 font-manrope antialiased text-sm tracking-tight">supython</div>
+<div class="relative hidden md:block w-64">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-sm">search</span>
+<input class="w-full bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded pl-8 pr-2 py-1 focus:outline-none focus:border-emerald-500 font-mono-code text-mono-code placeholder:text-slate-500" placeholder="Search..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="bg-role-service text-white font-label-caps text-label-caps px-3 py-1 rounded cursor-pointer active:opacity-80 transition-none hover:bg-slate-800 hover:text-emerald-400">
+                    service_role
+                </button>
+<div class="flex items-center gap-2">
+<button class="text-slate-400 font-medium hover:bg-slate-800 hover:text-emerald-400 p-1.5 rounded cursor-pointer active:opacity-80 transition-none">
+<span class="material-symbols-outlined text-lg">terminal</span>
+</button>
+<button class="text-slate-400 font-medium hover:bg-slate-800 hover:text-emerald-400 p-1.5 rounded cursor-pointer active:opacity-80 transition-none">
+<span class="material-symbols-outlined text-lg">notifications</span>
+</button>
+<button class="text-slate-400 font-medium hover:bg-slate-800 hover:text-emerald-400 p-1.5 rounded cursor-pointer active:opacity-80 transition-none">
+<span class="material-symbols-outlined text-lg">help</span>
+</button>
+</div>
+<div class="w-8 h-8 rounded-full overflow-hidden border border-slate-700 ml-2">
+<img alt="Operator Avatar" class="w-full h-full object-cover" data-alt="A close up portrait of an operator or engineer, dimly lit with green neon highlights on their face, cyber punk style." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAgP4bKr5xdxUkzqc1KcZkjTPskaUdNUJu-WT1KP2qV7Bl6RhAln5mMzwTnbS_B_VroaVI4vmtS8R7uRSWi9jLpUN564rU1vtkZzvpu7poN6Aq7kIT88U-oUmlawg4JDnS8saiUhLNI0fXOZ4Cng8mhER_zCc40ZS7sR0wkSZuWIpjYGWGoc0zV93oG0m6nok3BA6b2rqDJCwnr4KhxQo5DJmNmXNTLwCNBDenfAoMrfvsnQtX37DTSZ_6rIgmYoE_Rh6rHTJ0vi-A"/>
+</div>
+</div>
+</header>
+<!-- Main Canvas -->
+<main class="flex-1 overflow-y-auto p-gutter bg-surface-background">
+
+</main>
+</div>
+</body></html>

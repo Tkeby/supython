@@ -1,0 +1,44 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.sqlite3
+.DS_Store
+.cursor
+.cursor/
+.cursor/rules/
+
+.kilo
+.kilo/
+.kilo/killo.jsonc
+
+# dev-app/ is the dogfooded scaffolded project living inside the lib repo.
+# Its checked-in shape (compose files, functions, storage fixtures) mirrors
+# what `supython init` would produce; runtime state stays untracked.
+dev-app/.env
+dev-app/.supython/
+dev-app/backups/
+dev-app/__pycache__/
+dev-app/functions/__pycache__/
+dev-app/.tmp/
+
+.references/
+.claude/
+
+ts-sdk/node_modules/
+ts-sdk/dist/
+ts-sdk/.turbo/
+ts-sdk/.vitest-results/
+ts-sdk/*.log
+
+.tmp/
+
+admin-ui/node_modules/

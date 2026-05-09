@@ -1,0 +1,2 @@
+import{Wn as e,tr as t}from"./Space-n5-XcguU.js";function n(n,r=()=>[]){let i=t(null),a=t(null),o=t(!1);async function s(){o.value=!0,a.value=null;try{i.value=await n()}catch(e){a.value=e}finally{o.value=!1}}return e(()=>{r(),s()}),{data:i,error:a,loading:o,refresh:s}}export{n as t};
+//# sourceMappingURL=useResource-C_rJCY8C.js.map

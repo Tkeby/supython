@@ -1,0 +1,11 @@
+#!/usr/bin/env python
+"""Project entrypoint. Sets SUPYTHON_SETTINGS_MODULE then delegates to supython CLI."""
+import os
+import sys
+
+os.environ.setdefault("SUPYTHON_SETTINGS_MODULE", "{name}.settings")
+
+if __name__ == "__main__":
+    from supython.cli import app as cli_app
+
+    cli_app()

@@ -1,0 +1,1 @@
+{"version":3,"file":"useToast-DsZKx0IX.js","names":[],"sources":["../../../../../admin-ui/src/composables/useToast.ts"],"sourcesContent":["import { inject } from 'vue'\nimport type { MessageApi } from 'naive-ui'\n\nexport function useToast() {\n  return inject<{ message: MessageApi }>('discrete')!.message\n}\n"],"mappings":"yCAGA,SAAgB,GAAW,CACzB,OAAO,EAAgC,WAAW,CAAE"}

@@ -1,0 +1,2 @@
+import{Un as e,mn as t}from"./Space-n5-XcguU.js";function n(n,r){return e(n,e=>{e!==void 0&&(r.value=e)}),t(()=>n.value===void 0?r.value:n.value)}export{n as t};
+//# sourceMappingURL=use-merged-state-BvhkaHNX.js.map

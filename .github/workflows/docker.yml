@@ -1,0 +1,121 @@
+name: Docker image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - src/**
+      - .github/workflows/docker.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - src/**
+      - .github/workflows/docker.yml
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  # v0.8 budget — see docs/PROJECT.md "Image size budget".
+  IMAGE_SIZE_BUDGET_MB: 200
+
+jobs:
+  # PR / branch builds: verify the image builds for both arches and that the
+  # amd64 layer set stays under the 200 MB budget. Nothing is published.
+  build:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Build both arches; keep the build cache warm across jobs.
+      - name: Build (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: supython:ci
+
+      # Re-build the amd64 image into the local Docker daemon so we can
+      # measure its size. `docker buildx build --load` only supports a single
+      # platform — that is fine, the amd64 size is the budget signal.
+      - name: Load amd64 image for size check
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          cache-from: type=gha
+          tags: supython:size-check
+
+      - name: Enforce image size budget (<${{ env.IMAGE_SIZE_BUDGET_MB }} MB, amd64)
+        run: |
+          set -euo pipefail
+          # `docker save` produces the uncompressed tar of all layers — the
+          # canonical "image size". `inspect .Size` is unreliable across
+          # image-store backends.
+          docker save supython:size-check -o /tmp/supython-image.tar
+          size_bytes=$(stat -c%s /tmp/supython-image.tar)
+          size_mb=$(( size_bytes / 1024 / 1024 ))
+          echo "supython:size-check amd64 image size: ${size_mb} MB (budget ${IMAGE_SIZE_BUDGET_MB} MB)"
+          if [ "${size_mb}" -ge "${IMAGE_SIZE_BUDGET_MB}" ]; then
+            echo "::error::Image size ${size_mb} MB exceeds budget ${IMAGE_SIZE_BUDGET_MB} MB"
+            exit 1
+          fi
+
+  # Tag pushes publish the multi-arch manifest to GHCR.
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"
+          {
+            echo "${IMAGE}:${ref}"
+            echo "${IMAGE}:latest"
+          } > tags.txt
+          {
+            echo "list<<EOF"
+            cat tags.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ${{ steps.tags.outputs.list }}

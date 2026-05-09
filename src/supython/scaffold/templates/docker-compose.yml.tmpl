@@ -1,0 +1,45 @@
+name: {name}
+
+services:
+  db:
+    # Build a Postgres image with `pg_cron` baked in (see docker/postgres/Dockerfile).
+    # `pg_cron` is required by migration 0001_extensions_and_roles.sql, so the
+    # stock `postgres:*-alpine` image is not sufficient. The first `supython up`
+    # builds this image once; later runs reuse the cached layer.
+    build: ./docker/postgres
+    container_name: {name}-db
+    environment:
+      POSTGRES_USER: {name}
+      POSTGRES_PASSWORD: {name}
+      POSTGRES_DB: {name}
+    ports:
+      - "54322:5432"
+    volumes:
+      - {name}-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {name} -d {name}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: {name}-postgrest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${{AUTHENTICATOR_PASSWORD:-authenticator}}@db:5432/{name}
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: "@/etc/postgrest/jwks.json"
+      PGRST_JWT_AUD: authenticated
+      PGRST_OPENAPI_MODE: ignore-privileges
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    ports:
+      - "54321:3000"
+    volumes:
+      - ./.supython/jwks.json:/etc/postgrest/jwks.json:ro
+
+volumes:
+  {name}-db-data:

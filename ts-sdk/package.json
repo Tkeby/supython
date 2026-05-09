@@ -1,0 +1,47 @@
+{
+  "name": "@supython/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for supython",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/postgrest-js": "^1.19.0",
+    "@supabase/realtime-js": "^2.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.x",
+    "@vitest/coverage-v8": "^2.1.9",
+    "openapi-typescript": "^7.x",
+    "tsup": "^8.x",
+    "typescript": "^5.x",
+    "vitest": "^2.x"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

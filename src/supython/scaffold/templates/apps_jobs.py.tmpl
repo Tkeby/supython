@@ -1,0 +1,8 @@
+"""Background jobs for {name}."""
+from supython.jobs.context import JobCtx
+from supython.jobs.decorators import job
+
+
+@job("{name}_example_job")
+async def example_job(ctx: JobCtx) -> None:
+    ctx.logger.info("example_job ran with payload=%s", ctx.payload)

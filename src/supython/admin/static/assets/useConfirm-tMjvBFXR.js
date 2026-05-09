@@ -1,0 +1,2 @@
+import{En as e}from"./Space-n5-XcguU.js";function t(){let{dialog:t}=e(`discrete`);return(e,n)=>new Promise(r=>{t.warning({title:e,content:n,positiveText:`Confirm`,negativeText:`Cancel`,onPositiveClick:()=>r(!0),onNegativeClick:()=>r(!1),onClose:()=>r(!1)})})}export{t};
+//# sourceMappingURL=useConfirm-tMjvBFXR.js.map

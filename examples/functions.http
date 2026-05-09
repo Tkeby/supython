@@ -1,0 +1,172 @@
+# End-to-end walkthrough: supython edge functions (port 8000).
+#
+# Each step is a curl command you can copy-paste.  The comments explain
+# what the framework does behind the scenes so the output makes sense.
+#
+# Prerequisites:
+#   supython up          (starts Postgres :54322 + PostgREST :54321)
+#   supython dev         (starts the API on :8000 with hot reload)
+#
+# The walkthrough creates two fixture functions.  Drop them in functions/
+# while `supython dev` is running — no restart needed.
+#
+# functions/hello.py
+# ------------------
+#   auth = "anon"
+#   methods = ["GET", "POST"]
+#
+#   async def handler(req, ctx):
+#       name = ctx.user.email if ctx.user else "world"
+#       return {"msg": f"hello, {name}"}
+#
+# functions/me.py
+# ---------------
+#   async def handler(req, ctx):
+#       u = ctx.user
+#       return {"id": str(u.id), "email": u.email, "role": u.role}
+#
+# functions/upload.py
+# -------------------
+#   async def handler(req, ctx):
+#       body = await req.body()
+#
+#       async def _stream():
+#           yield body
+#
+#       obj = await ctx.storage.upload(
+#           bucket="avatars",
+#           path=f"{ctx.user.id}/payload.bin",
+#           data=_stream(),
+#           content_type="application/octet-stream",
+#       )
+#       signed = await ctx.storage.sign(
+#           bucket="avatars",
+#           path=f"{ctx.user.id}/payload.bin",
+#           expires_in=3600,
+#       )
+#       return {"key": f"{obj.bucket}/{obj.name}", "signed_url": signed.signed_url}
+
+###############################################################################
+# 1. Sign up and grab the access token.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/signup \
+   -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"password123"}'
+
+###############################################################################
+# 2. Stash the token for subsequent requests.
+###############################################################################
+ TOKEN=$(curl -sS -X POST http://localhost:8000/auth/v1/token \
+   -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"password123"}' \
+   | python -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+
+###############################################################################
+# 3. Call the public hello function — no bearer required.
+#    The dispatcher loads functions/hello.py on the first request; subsequent
+#    calls use the cached handler until the file's mtime changes.
+###############################################################################
+ curl -sS http://localhost:8000/functions/hello
+# → {"msg":"hello, world"}
+
+###############################################################################
+# 4. Call hello with a bearer token — ctx.user.email fills the greeting.
+###############################################################################
+ curl -sS http://localhost:8000/functions/hello \
+   -H "authorization: Bearer $TOKEN"
+# → {"msg":"hello, alice@example.com"}
+
+###############################################################################
+# 5. Wrong method on hello (only GET and POST are declared).
+###############################################################################
+ curl -sS -X DELETE http://localhost:8000/functions/hello \
+   -H "authorization: Bearer $TOKEN"
+# → 405 {"detail":{"code":"method_not_allowed","message":"DELETE"}}
+
+###############################################################################
+# 6. Call an authenticated function without a bearer → 401.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/functions/me
+# → 401 {"detail":{"code":"invalid_token","message":"Missing or invalid bearer token"}}
+
+###############################################################################
+# 7. Call /functions/me with a valid bearer.
+#    ctx.user is populated from the decoded JWT; ctx.db is scoped to the
+#    "authenticated" role with request.jwt.claims set — the same RLS verdict
+#    PostgREST would apply for the same JWT.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/functions/me \
+   -H "authorization: Bearer $TOKEN"
+# → {"id":"<uuid>","email":"alice@example.com","role":"authenticated"}
+
+###############################################################################
+# 8. Create a storage bucket (required before upload.py can write to it).
+###############################################################################
+ curl -sS -X POST http://localhost:8000/storage/v1/bucket \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/json' \
+   -d '{"name":"avatars","public":false}'
+
+###############################################################################
+# 9. Upload bytes via /functions/upload.
+#    The handler calls ctx.storage.upload(), which writes the metadata row in
+#    storage.objects (via the role-scoped ctx.db) and the bytes to the backend.
+#    It then mints a signed URL via ctx.storage.sign() and returns both.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/functions/upload \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/octet-stream' \
+   --data-binary 'hello from functions upload'
+# → {"key":"avatars/<uuid>/payload.bin","signed_url":"http://localhost:8000/storage/v1/object/sign/..."}
+
+###############################################################################
+# 10. Stash the signed URL from step 9 and fetch the bytes without a bearer.
+#     Signed URLs embed a short-lived HMAC token; no JWT needed.
+###############################################################################
+ SIGNED_URL=$(curl -sS -X POST http://localhost:8000/functions/upload \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/octet-stream' \
+   --data-binary 'test payload' \
+   | python -c 'import sys,json;print(json.load(sys.stdin)["signed_url"])')
+
+ curl -sS -D - "$SIGNED_URL" -o /tmp/downloaded.bin
+
+###############################################################################
+# 11. RLS isolation: a second user cannot download alice's object.
+#     The storage API returns 404 (not 403) so object existence is not leaked.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/signup \
+   -H 'content-type: application/json' \
+   -d '{"email":"bob@example.com","password":"password123"}'
+
+ TOKEN_BOB=$(curl -sS -X POST http://localhost:8000/auth/v1/token \
+   -H 'content-type: application/json' \
+   -d '{"email":"bob@example.com","password":"password123"}' \
+   | python -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+
+ ALICE_ID=$(curl -sS -X POST http://localhost:8000/auth/v1/token \
+   -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"password123"}' \
+   | python -c 'import sys,json;print(json.load(sys.stdin)["user"]["id"])')
+
+ curl -sS -D - "http://localhost:8000/storage/v1/object/avatars/${ALICE_ID}/payload.bin" \
+   -H "authorization: Bearer $TOKEN_BOB"
+# → 404
+
+###############################################################################
+# 12. List all discovered functions via the CLI.
+#     Prints each function's name, allowed methods, and auth mode.
+###############################################################################
+ supython functions list
+# →   hello                          methods=GET,POST auth=anon
+# →   me                             methods=POST     auth=authenticated
+# →   upload                         methods=POST     auth=authenticated
+
+###############################################################################
+# 13. Hot-reload demo: edit functions/hello.py while the server is running.
+#     Change the return value, save the file, then call the function again —
+#     the new handler is active on the very next request, no restart needed.
+###############################################################################
+ # Edit functions/hello.py: change {"msg": f"hello, {name}"} to {"msg": f"hi, {name}!"}
+ curl -sS http://localhost:8000/functions/hello
+# → {"msg":"hi, world!"}

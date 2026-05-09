@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>supython — Realtime Chat Demo</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3148;
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; color: #a78bfa; }
+    header .badge {
+      font-size: 0.7rem;
+      background: #2d3748;
+      color: #68d391;
+      padding: 0.2rem 0.5rem;
+      border-radius: 999px;
+      font-weight: 500;
+    }
+
+    .container {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ---- sidebar ---- */
+    aside {
+      width: 280px;
+      background: #1a1d27;
+      border-right: 1px solid #2d3148;
+      display: flex;
+      flex-direction: column;
+      padding: 1rem;
+      gap: 0.75rem;
+    }
+    aside h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #718096; margin-bottom: 0.25rem; }
+    label { font-size: 0.82rem; color: #a0aec0; display: block; margin-bottom: 0.3rem; }
+    input, select {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 6px;
+      padding: 0.45rem 0.6rem;
+      color: #e2e8f0;
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus { border-color: #7c3aed; }
+    input::placeholder { color: #4a5568; }
+
+    .btn {
+      width: 100%;
+      padding: 0.55rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.87rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #7c3aed; color: #fff; }
+    .btn-primary:not(:disabled):hover { background: #6d28d9; }
+    .btn-danger  { background: #991b1b; color: #fff; }
+    .btn-danger:not(:disabled):hover  { background: #7f1d1d; }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      color: #718096;
+    }
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #4a5568;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .dot.connecting { background: #d69e2e; }
+    .dot.open       { background: #38a169; }
+    .dot.closed     { background: #e53e3e; }
+
+    .sep { border: none; border-top: 1px solid #2d3148; }
+
+    /* ---- main chat ---- */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    #messages::-webkit-scrollbar { width: 6px; }
+    #messages::-webkit-scrollbar-track { background: transparent; }
+    #messages::-webkit-scrollbar-thumb { background: #2d3148; border-radius: 3px; }
+
+    .msg {
+      max-width: 680px;
+      padding: 0.55rem 0.85rem;
+      border-radius: 10px;
+      font-size: 0.88rem;
+      line-height: 1.5;
+      word-break: break-word;
+      animation: fadeIn 0.15s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+
+    .msg-broadcast {
+      background: #1e293b;
+      border: 1px solid #2d3148;
+      align-self: flex-start;
+    }
+    .msg-broadcast.own {
+      background: #2e1065;
+      border-color: #6d28d9;
+      align-self: flex-end;
+    }
+    .msg-system {
+      align-self: center;
+      font-size: 0.75rem;
+      color: #4a5568;
+      background: transparent;
+      border: none;
+      padding: 0.2rem 0;
+    }
+    .msg-postgres {
+      background: #0d2618;
+      border: 1px solid #1a4731;
+      align-self: flex-start;
+    }
+    .msg-head {
+      font-size: 0.7rem;
+      color: #718096;
+      margin-bottom: 0.2rem;
+    }
+    .msg-head strong { color: #a78bfa; }
+
+    /* ---- input bar ---- */
+    #input-bar {
+      background: #1a1d27;
+      border-top: 1px solid #2d3148;
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    #msg-input {
+      flex: 1;
+      padding: 0.6rem 0.9rem;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      outline: none;
+    }
+    #msg-input:focus { border-color: #7c3aed; }
+    #msg-input::placeholder { color: #4a5568; }
+    #send-btn {
+      padding: 0 1.2rem;
+      background: #7c3aed;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #send-btn:not(:disabled):hover { background: #6d28d9; }
+
+    /* ---- log panel (collapsible) ---- */
+    details {
+      border-top: 1px solid #2d3148;
+      font-size: 0.75rem;
+    }
+    details summary {
+      padding: 0.5rem 1.5rem;
+      cursor: pointer;
+      color: #4a5568;
+      user-select: none;
+      outline: none;
+    }
+    details summary:hover { color: #718096; }
+    #wire-log {
+      height: 120px;
+      overflow-y: auto;
+      padding: 0.5rem 1.5rem;
+      background: #0a0c10;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 0.72rem;
+      color: #4a5568;
+    }
+    #wire-log .in  { color: #38a169; }
+    #wire-log .out { color: #7c3aed; }
+    #wire-log .err { color: #e53e3e; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>supython / Realtime</h1>
+  <span class="badge">chat demo · Phoenix Channels v1</span>
+</header>
+
+<div class="container">
+  <!-- ============================================================
+       SIDEBAR — connection controls
+       ============================================================ -->
+  <aside>
+    <h2>Connection</h2>
+
+    <div>
+      <label for="server-url">Server URL</label>
+      <input id="server-url" type="text" value="ws://localhost:8000/realtime/v1/websocket" />
+    </div>
+
+    <div>
+      <label for="api-key">JWT / API key <span style="color:#4a5568">(blank → anon)</span></label>
+      <input id="api-key" type="text" placeholder="eyJ..." />
+    </div>
+
+    <div>
+      <label for="room-name">Channel name <span style="color:#4a5568">(realtime:<b>name</b>)</span></label>
+      <input id="room-name" type="text" value="room-1" />
+    </div>
+
+    <div>
+      <label for="display-name">Display name</label>
+      <input id="display-name" type="text" placeholder="alice" />
+    </div>
+
+    <hr class="sep" />
+
+    <div>
+      <label for="pg-schema">postgres_changes filter</label>
+      <select id="pg-schema">
+        <option value="none">— no postgres_changes —</option>
+        <option value="messages">public.messages (if migrated)</option>
+      </select>
+    </div>
+
+    <hr class="sep" />
+
+    <button id="connect-btn" class="btn btn-primary">Connect</button>
+    <button id="disconnect-btn" class="btn btn-danger" disabled>Disconnect</button>
+
+    <hr class="sep" />
+
+    <div class="status-row">
+      <div id="ws-dot" class="dot"></div>
+      <span id="ws-status">Disconnected</span>
+    </div>
+
+    <div class="status-row" style="margin-top:0.25rem">
+      <div id="ch-dot" class="dot"></div>
+      <span id="ch-status">No channel</span>
+    </div>
+
+    <hr class="sep" />
+
+    <h2>Presence (<span id="presence-count">0</span>)</h2>
+    <ul id="presence-list" style="font-size:0.8rem;color:#718096;list-style:none;padding-left:0.25rem"></ul>
+  </aside>
+
+  <!-- ============================================================
+       MAIN PANEL — messages + input
+       ============================================================ -->
+  <main>
+    <div id="messages">
+      <div class="msg msg-system">
+        Open this page in two browser tabs, connect both, and start chatting.
+      </div>
+    </div>
+
+    <div id="input-bar">
+      <input id="msg-input" type="text" placeholder="Type a message and press Enter…" disabled />
+      <button id="send-btn" disabled>Send</button>
+    </div>
+
+    <details>
+      <summary>Wire log (raw frames)</summary>
+      <div id="wire-log"></div>
+    </details>
+  </main>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// supython Realtime — vanilla JS demo client
+//
+// Wire format: Phoenix Channels 5-tuple JSON array
+//   [join_ref, ref, topic, event, payload]
+//
+// Endpoint: ws://<host>/realtime/v1/websocket?apikey=<jwt>&vsn=1.0.0
+// ---------------------------------------------------------------------------
+
+"use strict";
+
+// ---- state ----------------------------------------------------------------
+let ws         = null;
+let refCounter = 0;
+let joinRef    = null;
+let topic      = null;
+let displayName = "";
+let joinMsgRef    = null;
+let channelJoined = false;
+let heartbeatTimer = null;
+let subscriptionIds = [];          // server-assigned postgres_changes ids
+const presenceState = {};          // key → {name, …}
+
+// ---- DOM refs -------------------------------------------------------------
+const serverUrlEl    = document.getElementById("server-url");
+const apiKeyEl       = document.getElementById("api-key");
+const roomNameEl     = document.getElementById("room-name");
+const displayNameEl  = document.getElementById("display-name");
+const pgSchemaEl     = document.getElementById("pg-schema");
+const connectBtn     = document.getElementById("connect-btn");
+const disconnectBtn  = document.getElementById("disconnect-btn");
+const msgInput       = document.getElementById("msg-input");
+const sendBtn        = document.getElementById("send-btn");
+const messagesEl     = document.getElementById("messages");
+const wsDot          = document.getElementById("ws-dot");
+const wsStatus       = document.getElementById("ws-status");
+const chDot          = document.getElementById("ch-dot");
+const chStatus       = document.getElementById("ch-status");
+const wireLog        = document.getElementById("wire-log");
+const presenceCount  = document.getElementById("presence-count");
+const presenceList   = document.getElementById("presence-list");
+
+// ---- helpers --------------------------------------------------------------
+function nextRef() { return String(++refCounter); }
+
+function encode(joinRef, ref, topicStr, event, payload) {
+  return JSON.stringify([joinRef, ref, topicStr, event, payload]);
+}
+
+function decode(raw) {
+  const arr = JSON.parse(raw);
+  if (!Array.isArray(arr) || arr.length !== 5) throw new Error("bad frame");
+  const [jRef, ref, topic, event, payload] = arr;
+  return { joinRef: jRef, ref, topic, event, payload };
+}
+
+function logWire(dir, text) {
+  const row = document.createElement("div");
+  row.className = dir;                       // "in" | "out" | "err"
+  const ts = new Date().toISOString().slice(11, 23);
+  row.textContent = `${ts} ${dir === "out" ? "→" : "←"} ${text}`;
+  wireLog.appendChild(row);
+  wireLog.scrollTop = wireLog.scrollHeight;
+}
+
+function addMessage(cls, html) {
+  const div = document.createElement("div");
+  div.className = `msg ${cls}`;
+  div.innerHTML = html;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function systemMsg(text) {
+  addMessage("msg-system", escHtml(text));
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function setWsStatus(state) {
+  wsDot.className   = "dot " + state;
+  wsStatus.textContent = { connecting: "Connecting…", open: "Connected", closed: "Disconnected" }[state] ?? state;
+}
+
+function setChStatus(state) {
+  chDot.className  = "dot " + state;
+  chStatus.textContent = state === "open" ? `Joined ${topic}` : state === "connecting" ? "Joining…" : "No channel";
+}
+
+function setInputEnabled(enabled) {
+  msgInput.disabled = !enabled;
+  sendBtn.disabled  = !enabled;
+}
+
+function renderPresence() {
+  const keys = Object.keys(presenceState);
+  presenceCount.textContent = keys.length;
+  presenceList.innerHTML = keys.map(k => {
+    const m = presenceState[k];
+    const name = m?.name ?? k;
+    return `<li>• ${escHtml(name)}</li>`;
+  }).join("");
+}
+
+// ---- heartbeat (client sends every 25s) -----------------------------------
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const frame = encode(null, nextRef(), "phoenix", "heartbeat", {});
+      ws.send(frame);
+      logWire("out", frame);
+    }
+  }, 25_000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer !== null) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+}
+
+// ---- join a channel -------------------------------------------------------
+function joinChannel() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  joinRef    = nextRef();
+  const ref  = nextRef();
+  joinMsgRef = ref;
+  topic      = "realtime:" + roomNameEl.value.trim();
+  setChStatus("connecting");
+
+  const pgFilters = [];
+  if (pgSchemaEl.value === "messages") {
+    pgFilters.push({ event: "*", schema: "public", table: "messages" });
+  }
+
+  const payload = {
+    config: {
+      postgres_changes: pgFilters,
+      broadcast: { self: false, ack: false },
+      presence:  { key: displayName || "anon" }
+    }
+  };
+
+  const apiKey = apiKeyEl.value.trim();
+  if (apiKey) payload.access_token = apiKey;
+
+  const frame = encode(joinRef, ref, topic, "phx_join", payload);
+  ws.send(frame);
+  logWire("out", frame);
+}
+
+// ---- send a broadcast message ---------------------------------------------
+function sendMessage() {
+  const text = msgInput.value.trim();
+  if (!text || !channelJoined || !ws) return;
+
+  const name = displayName || "anon";
+  const ref  = nextRef();
+  const payload = {
+    type:    "broadcast",
+    event:   "chat_message",
+    payload: { text, from: name, ts: Date.now() }
+  };
+  const frame = encode(joinRef, ref, topic, "broadcast", payload);
+  ws.send(frame);
+  logWire("out", frame);
+
+  // show our own message immediately (self-echo is off by default on the server)
+  addMessage("msg-broadcast own", `<div class="msg-head"><strong>You</strong></div>${escHtml(text)}`);
+  msgInput.value = "";
+}
+
+// ---- presence: track ourselves on join -----------------------------------
+function trackPresence() {
+  if (!ws || !channelJoined) return;
+  const name = displayName || "anon";
+  const payload = {
+    type:    "presence",
+    event:   "track",
+    payload: { name }
+  };
+  const frame = encode(joinRef, nextRef(), topic, "presence", payload);
+  ws.send(frame);
+  logWire("out", frame);
+}
+
+// ---- incoming frame dispatcher -------------------------------------------
+function handleFrame(frame) {
+  const { joinRef: jRef, ref, topic: t, event, payload } = frame;
+
+  // heartbeat ack — nothing to do
+  if (event === "phx_reply" && t === "phoenix") return;
+
+  // channel join reply
+  if (event === "phx_reply" && t === topic && ref === joinMsgRef) {
+    joinMsgRef = null;
+    if (payload?.status === "ok") {
+      channelJoined = true;
+      setChStatus("open");
+      systemMsg(`✓ Joined ${t}`);
+      subscriptionIds = (payload?.response?.postgres_changes ?? []).map(s => s.id);
+      if (subscriptionIds.length) {
+        systemMsg(`Subscribed to postgres_changes ids: ${subscriptionIds.join(", ")}`);
+      }
+      trackPresence();
+      setInputEnabled(true);
+    } else {
+      const reason = payload?.response?.reason ?? JSON.stringify(payload);
+      systemMsg(`✗ Join failed: ${reason}`);
+      setChStatus("closed");
+    }
+    return;
+  }
+
+  // broadcast from peer
+  if (event === "broadcast" && t === topic) {
+    const inner = payload?.payload ?? payload;
+    const from  = inner?.from ?? "peer";
+    const text  = inner?.text ?? JSON.stringify(inner);
+    addMessage("msg-broadcast", `<div class="msg-head"><strong>${escHtml(from)}</strong></div>${escHtml(text)}`);
+    return;
+  }
+
+  // postgres_changes push
+  if (event === "postgres_changes" && t === topic) {
+    const d = payload?.data ?? payload;
+    const op    = d?.type ?? "?";
+    const tbl   = `${d?.schema ?? "?"}.${d?.table ?? "?"}`;
+    const rec   = d?.record   ? JSON.stringify(d.record,   null, 2) : null;
+    const oldRec= d?.old_record ? JSON.stringify(d.old_record, null, 2) : null;
+    let html = `<div class="msg-head">🗄 <strong>${escHtml(op)}</strong> on <em>${escHtml(tbl)}</em></div>`;
+    if (rec)    html += `<pre style="margin-top:0.3rem;font-size:0.78rem;overflow-x:auto">${escHtml(rec)}</pre>`;
+    if (oldRec) html += `<pre style="margin-top:0.3rem;font-size:0.78rem;color:#718096;overflow-x:auto">was: ${escHtml(oldRec)}</pre>`;
+    addMessage("msg-postgres", html);
+    return;
+  }
+
+  // presence_state — full state on join
+  if (event === "presence_state" && t === topic) {
+    Object.assign(presenceState, payload ?? {});
+    renderPresence();
+    return;
+  }
+
+  // presence_diff — joins / leaves
+  if (event === "presence_diff" && t === topic) {
+    const joins  = payload?.joins  ?? {};
+    const leaves = payload?.leaves ?? {};
+    for (const [k, v] of Object.entries(joins)) {
+      const metas = v?.metas ?? [v];
+      presenceState[k] = metas[0] ?? {};
+      systemMsg(`→ ${presenceState[k]?.name ?? k} joined`);
+    }
+    for (const k of Object.keys(leaves)) {
+      const name = presenceState[k]?.name ?? k;
+      delete presenceState[k];
+      systemMsg(`← ${name} left`);
+    }
+    renderPresence();
+    return;
+  }
+
+  // phx_error / phx_close from server
+  if (event === "phx_error" || event === "phx_close") {
+    systemMsg(`Server sent ${event} on ${t}`);
+    if (t === topic) { channelJoined = false; setChStatus("closed"); setInputEnabled(false); }
+    return;
+  }
+}
+
+// ---- connect / disconnect -------------------------------------------------
+connectBtn.addEventListener("click", () => {
+  displayName = displayNameEl.value.trim();
+
+  const base   = serverUrlEl.value.trim();
+  const apiKey = apiKeyEl.value.trim();
+  const url    = base + "?vsn=1.0.0" + (apiKey ? "&apikey=" + encodeURIComponent(apiKey) : "");
+
+  setWsStatus("connecting");
+  connectBtn.disabled    = true;
+  disconnectBtn.disabled = false;
+  channelJoined = false;
+  Object.keys(presenceState).forEach(k => delete presenceState[k]);
+  renderPresence();
+
+  try {
+    ws = new WebSocket(url);
+  } catch (err) {
+    systemMsg("WebSocket error: " + err.message);
+    setWsStatus("closed");
+    connectBtn.disabled    = false;
+    disconnectBtn.disabled = true;
+    return;
+  }
+
+  ws.addEventListener("open", () => {
+    setWsStatus("open");
+    systemMsg("WebSocket connected");
+    startHeartbeat();
+    joinChannel();
+  });
+
+  ws.addEventListener("message", (ev) => {
+    logWire("in", ev.data);
+    try {
+      handleFrame(decode(ev.data));
+    } catch (err) {
+      logWire("err", "parse error: " + err.message);
+    }
+  });
+
+  ws.addEventListener("close", (ev) => {
+    stopHeartbeat();
+    channelJoined = false;
+    setWsStatus("closed");
+    setChStatus("closed");
+    setInputEnabled(false);
+    connectBtn.disabled    = false;
+    disconnectBtn.disabled = true;
+    systemMsg(`WebSocket closed (code ${ev.code})`);
+  });
+
+  ws.addEventListener("error", () => {
+    logWire("err", "WebSocket error");
+    systemMsg("WebSocket error — check the server URL and CORS settings");
+  });
+});
+
+disconnectBtn.addEventListener("click", () => {
+  if (ws) ws.close(1000, "user disconnected");
+});
+
+// ---- send on Enter / button -----------------------------------------------
+msgInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+sendBtn.addEventListener("click", sendMessage);
+</script>
+</body>
+</html>

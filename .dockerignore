@@ -1,0 +1,42 @@
+.git
+.github
+.venv
+.env
+.env.*
+!.env.example
+
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+.coverage.*
+
+# Dogfooded sandbox app — never goes into the library image
+dev-app
+
+# Tests and dev-only trees
+tests
+docker
+docker-compose*.yml
+ts-sdk
+backups
+
+# Admin UI source (the built bundle under src/supython/admin/static is shipped)
+admin-ui/node_modules
+admin-ui/dist
+admin-ui/.vite
+admin-ui/coverage
+
+# Editor / OS noise
+.idea
+.vscode
+.DS_Store
+
+# Local artifacts
+Dockerfile
+.dockerignore

@@ -1,0 +1,22 @@
+# {name}
+
+A [supython](https://github.com/your-org/supython) project.
+
+## Quick start
+
+```bash
+cp .env.example .env
+pip install supython
+supython up   # start Postgres + PostgREST and apply migrations
+supython dev  # start the auth/API service on http://localhost:8000
+```
+
+## Layout
+
+- `migrations/` — SQL migration files (applied in filename order by `supython migrate`)
+- `functions/` — edge functions (one `.py` file per route, no restart required)
+- `.supython/` — generated JWT keypair and JWKS (private key is gitignored)
+
+## Docs
+
+See the [supython documentation](https://github.com/your-org/supython) for full reference.

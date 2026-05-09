@@ -1,0 +1,14 @@
+"""ASGI entrypoint.
+
+For most workflows you do not need this file — ``./manage.py dev`` and
+``supython dev`` serve ``supython.app:app`` directly. Use this when you
+want to run the app under your own uvicorn / gunicorn invocation:
+
+    uvicorn {name}.asgi:app
+
+``build_app`` is a public alias of ``supython.app.create_app``.
+"""
+
+from supython import build_app
+
+app = build_app()

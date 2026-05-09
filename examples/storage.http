@@ -1,0 +1,155 @@
+# End-to-end demo: storage buckets and objects through supython (port 8000).
+#
+# - Auth is the same JWT flow as the todos example.
+# - All storage routes live under /storage/v1 on the supython service (not PostgREST).
+# - Default backend is local disk under STORAGE_LOCAL_ROOT; bytes stream, no full buffering.
+#
+# Usage with curl below; this file is also compatible with the JetBrains /
+# REST-Client style runners if you adapt the @variables.
+#
+# Signed URLs embed SITE_URL (default http://localhost:8000). Keep it aligned
+# with where you run curl so the minted link resolves.
+
+###############################################################################
+# 1. Sign up (or sign in). Grab access_token from the JSON response.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/signup \
+  -H 'content-type: application/json' \
+  -d '{"email":"alice@example.com","password":"password123"}'
+
+###############################################################################
+# 2. Sign in — same shape as signup.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/token \
+   -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"password123"}'
+
+###############################################################################
+# Stash Alice's access_token for bearer requests to /storage/v1.
+###############################################################################
+ TOKEN=$(curl -sS -X POST http://localhost:8000/auth/v1/token \
+   -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"password123"}' \
+   | python -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+
+###############################################################################
+# 3. Create a private bucket (bucket names: lowercase letters, digits, _ -).
+###############################################################################
+ curl -sS -X POST http://localhost:8000/storage/v1/bucket \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/json' \
+   -d '{"name":"avatars","public":false}'
+
+###############################################################################
+# 4. List buckets visible to the caller (RLS: all authenticated users can read).
+###############################################################################
+ curl -sS http://localhost:8000/storage/v1/bucket \
+   -H "authorization: Bearer $TOKEN"
+
+###############################################################################
+# 5. Fetch one bucket by name.
+###############################################################################
+ curl -sS http://localhost:8000/storage/v1/bucket/avatars \
+   -H "authorization: Bearer $TOKEN"
+
+###############################################################################
+# 6. Upload a file (multipart/form-data). Path is the object key inside the bucket.
+###############################################################################
+ echo -n 'hello from storage demo' >/tmp/avatar.txt
+ curl -sS -X POST http://localhost:8000/storage/v1/object/avatars/me/profile.txt \
+   -H "authorization: Bearer $TOKEN" \
+   -F 'file=@/tmp/avatar.txt;type=text/plain'
+
+###############################################################################
+# 7. Download the full object (200, body matches upload).
+###############################################################################
+ curl -sS -D - http://localhost:8000/storage/v1/object/avatars/me/profile.txt \
+   -H "authorization: Bearer $TOKEN" \
+   -o /tmp/downloaded.txt
+
+###############################################################################
+# 8. Ranged download (206 Partial Content + Content-Range).
+###############################################################################
+ curl -sS -D - http://localhost:8000/storage/v1/object/avatars/me/profile.txt \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'range: bytes=0-4' \
+   -o /tmp/range.bin
+
+###############################################################################
+# 9. Mint a signed URL (caller must be allowed to read the object via RLS).
+#    Optional JSON body: {"expires_in": 3600} — omit to use server default TTL.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/storage/v1/object/sign/avatars/me/profile.txt \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/json' \
+   -d '{"expires_in": 3600}'
+
+###############################################################################
+# 10. Fetch bytes with the signed URL — no Authorization header.
+#     Paste signed_url from step 9, or reconstruct from token query param:
+###############################################################################
+ SIGNED_URL=$(curl -sS -X POST \
+   http://localhost:8000/storage/v1/object/sign/avatars/me/profile.txt \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/json' \
+   -d '{"expires_in": 3600}' \
+   | python -c 'import sys,json;print(json.load(sys.stdin)["signed_url"])')
+ curl -sS -D - "$SIGNED_URL" -o /tmp/signed-download.txt
+
+###############################################################################
+# 11. Isolation: a second user cannot read a private-bucket object (404, not a leak).
+###############################################################################
+ curl -sS -X POST http://localhost:8000/auth/v1/signup \
+   -H 'content-type: application/json' \
+   -d '{"email":"bob@example.com","password":"password123"}'
+
+ TOKEN_BOB=$(curl -sS -X POST http://localhost:8000/auth/v1/token \
+   -H 'content-type: application/json' \
+   -d '{"email":"bob@example.com","password":"password123"}' \
+   | python -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+
+ curl -sS -D - http://localhost:8000/storage/v1/object/avatars/me/profile.txt \
+   -H "authorization: Bearer $TOKEN_BOB" \
+   -o /dev/null
+
+###############################################################################
+# 12. Public bucket: anonymous read via /object/public/... (no JWT).
+#     Create a public bucket and upload (as Alice), then anyone can GET.
+###############################################################################
+ curl -sS -X POST http://localhost:8000/storage/v1/bucket \
+   -H "authorization: Bearer $TOKEN" \
+   -H 'content-type: application/json' \
+   -d '{"name":"public-assets","public":true}'
+
+ echo -n 'everyone can read this' >/tmp/public.txt
+ curl -sS -X POST http://localhost:8000/storage/v1/object/public-assets/logo.txt \
+   -H "authorization: Bearer $TOKEN" \
+   -F 'file=@/tmp/public.txt;type=text/plain'
+
+ curl -sS http://localhost:8000/storage/v1/object/public/public-assets/logo.txt \
+   -o /tmp/public-download.txt
+
+###############################################################################
+# 13. Delete the object, then the bucket (204 No Content on success).
+###############################################################################
+ curl -sS -X DELETE http://localhost:8000/storage/v1/object/avatars/me/profile.txt \
+   -H "authorization: Bearer $TOKEN" \
+   -D -
+
+ curl -sS -X DELETE http://localhost:8000/storage/v1/object/public-assets/logo.txt \
+   -H "authorization: Bearer $TOKEN" \
+   -D -
+
+ curl -sS -X DELETE http://localhost:8000/storage/v1/bucket/avatars \
+   -H "authorization: Bearer $TOKEN" \
+   -D -
+
+ curl -sS -X DELETE http://localhost:8000/storage/v1/bucket/public-assets \
+   -H "authorization: Bearer $TOKEN" \
+   -D -
+
+###############################################################################
+# 14. Whoami — same JWT check as the todos walkthrough.
+###############################################################################
+ curl -sS http://localhost:8000/auth/v1/user \
+   -H "authorization: Bearer $TOKEN"

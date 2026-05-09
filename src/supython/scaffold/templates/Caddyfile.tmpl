@@ -1,0 +1,4 @@
+{{$SITE_URL}} {{
+	reverse_proxy /rest/v1/* postgrest:3000
+	reverse_proxy supython:8000
+}}

@@ -1,0 +1,42 @@
+name: supython
+
+services:
+  db:
+    build: ../docker/postgres
+    container_name: supython-db
+    environment:
+      POSTGRES_USER: supython
+      POSTGRES_PASSWORD: supython
+      POSTGRES_DB: supython
+    ports:
+      - "54322:5432"
+    volumes:
+      - supython-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supython -d supython"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: supython-postgrest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Connect as the `authenticator` role created by 0001_extensions_and_roles.sql.
+      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator}@db:5432/supython
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: "@/etc/postgrest/jwks.json"
+      PGRST_JWT_AUD: authenticated
+      PGRST_OPENAPI_MODE: ignore-privileges
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    ports:
+      - "54321:3000"
+    volumes:
+      - ./.supython/jwks.json:/etc/postgrest/jwks.json:ro
+
+volumes:
+  supython-db-data:

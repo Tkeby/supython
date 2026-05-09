@@ -1,0 +1,31 @@
+"""Project settings.
+
+Read by the supython CLI when ``SUPYTHON_SETTINGS_MODULE`` is set
+(``manage.py`` does this for you). Pure Python — declare what you want
+mounted on top of the framework.
+
+Conventional uppercase attributes:
+
+- ``EXTENSIONS``        list[str]  dotted module paths imported at boot,
+                                   so ``@job`` / ``@cron`` / ``@on``
+                                   decorators register before the
+                                   FastAPI app builds and before the
+                                   worker starts.
+- ``EXTRA_ROUTERS``     list[str]  ``"module.path:router_symbol"``
+                                   strings, mounted via
+                                   ``app.include_router``.
+- ``EXTRA_MIDDLEWARE``  list[str]  ``"module.path:ClassName"`` strings,
+                                   added via ``app.add_middleware``.
+
+Secrets and infrastructure (DATABASE_URL, JWT keys, OAuth secrets) stay
+in env / .env. They are typed by ``supython.settings.Settings`` and
+should never live in this file.
+"""
+
+EXTENSIONS = [
+    "{name}.jobs",
+    "{name}.hooks",
+]
+
+EXTRA_ROUTERS: list[str] = []
+EXTRA_MIDDLEWARE: list[str] = []
