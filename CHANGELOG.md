@@ -31,7 +31,7 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ---
 
-## [0.1.0] — 2026-05-08
+## [0.1.0] — 2026-05-09
 
 The first public release. Everything currently on `main` collapses
 into this single ZeroVer entry — auth, storage, functions, realtime,

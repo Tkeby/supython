@@ -1,6 +1,6 @@
 # supython
 
-> A lightweight, Postgres-first BaaS framework for Python. **v0.1.1 release**
+> A lightweight, Postgres-first BaaS framework for Python. **v0.1.0 release**
 
 **the database owns the schema, Python owns the things SQL is bad at**. 
 It leans on [PostgREST](https://postgrest.org)
@@ -11,7 +11,7 @@ storage, functions, workers, and an optional admin control plane.
 supython is for a specific person with a specific problem:
 > A developer who wants to build a CRUD-heavy web app (most apps are), who thinks in SQL, who wants Postgres to own authorization, and who wants auth + storage + custom logic without assembling the integration themselves.
 
-Shipped [v0.1.1]:
+Shipped [v0.1.0]:
 
 **Core platform**
 - **Email/password auth** — signup, login, refresh-token rotation with **reuse detection**
