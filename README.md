@@ -1,6 +1,6 @@
 # supython
 
-> A lightweight, Postgres-first BaaS framework for Python. **v0.1.0 release**
+> A lightweight, Postgres-first BaaS framework for Python. **v0.1.2 release**
 
 **the database owns the schema, Python owns the things SQL is bad at**. 
 It leans on [PostgREST](https://postgrest.org)
@@ -11,7 +11,7 @@ storage, functions, workers, and an optional admin control plane.
 supython is for a specific person with a specific problem:
 > A developer who wants to build a CRUD-heavy web app (most apps are), who thinks in SQL, who wants Postgres to own authorization, and who wants auth + storage + custom logic without assembling the integration themselves.
 
-Shipped [v0.1.0]:
+Shipped [v0.1.2]:
 
 **Core platform**
 - **Email/password auth** — signup, login, refresh-token rotation with **reuse detection**
@@ -48,7 +48,7 @@ Shipped [v0.1.0]:
 - **Secret rotation** — JWT keys, symmetric secrets, Postgres passwords; all with zero-downtime runbooks
 - **Multi-arch Docker image** — `linux/amd64` + `linux/arm64`, non-root user, `tini` PID 1, ~64 MB
 
-**Admin control plane** (shipped in v0.1.0)
+**Admin control plane** (shipped in v0.1.2)
 - **Vue 3 + Vite SPA** at `/admin` — no runtime Node deps; pre-built static bundle in the wheel
 - **Database surface** — schema browser, table data with role switcher, SQL workspace (read-only default + write toggle), RLS policy editor with dry-run, migrations panel
 - **Auth surface** — user search, ban/unban/force-logout, refresh-token inspector, audit log, email template editing
@@ -672,7 +672,7 @@ unit tests always run in isolation.
 **CI:** runners with Docker run `supython test up && supython test run`;
 runners without Docker run `pytest tests/unit` for a meaningful subset.
 
-## Roadmap [shipped v0.1.0]
+## Roadmap [shipped v0.1.2]
 
 - ✅ Email/password auth, PostgREST contract, RLS demo
 - ✅ OAuth, password reset, magic link, OTP, reuse detection, email backend, test suite
@@ -683,12 +683,12 @@ runners without Docker run `pytest tests/unit` for a meaningful subset.
 - ✅ Production observable: structured JSON logs, `/livez`/`/readyz`/`/health`, security headers, input size guards, audit log completeness, OAuth PKCE, secret rotation runbooks
 - ✅ (partial) Multi-arch Docker images, admin control plane (Vue 3 SPA — database, auth, storage, functions, realtime, jobs, backups, log tail), CI buildx workflow; benchmarks + security audit pass + dependency budget CI remaining
 - *(deferred)* — Realtime v2 over logical replication
-- v0.1.0 Release — final sweep, tag, publish wheel, production deployment with no patches
+- v0.1.2 Release — final sweep, tag, publish wheel, production deployment with no patches
 - ✅ **TypeScript SDK** — `@supython/sdk` wrapping `@supabase/postgrest-js` + `@supabase/realtime-js` 
 
-### Post v0.1.0
+### Post v0.1.2
 
-- **v1.1+** — Admin control plane polish (backend + frontend shipped in v0.1.0; tests + remaining DoD items deferred)
+- **v1.1+** — Admin control plane polish (backend + frontend shipped in v0.1.2; tests + remaining DoD items deferred)
 - **Realtime v2** — logical replication (demand-driven; swap when trigger overhead or >8KB payload data warrants it)
 - **Prometheus `/metrics`** + **OpenTelemetry** — optional extras
 
