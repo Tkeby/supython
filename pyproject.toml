@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "supython"
-version = "0.1.3"
+version = "0.1.4"
 description = "A lightweight Postgres-first BaaS framework for Python"
 readme = "README.md"
 requires-python = ">=3.11"

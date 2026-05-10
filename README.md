@@ -1,6 +1,6 @@
 # supython
 
-> A lightweight, Postgres-first BaaS framework for Python. **v0.1.2 release**
+> A lightweight, Postgres-first BaaS framework for Python. **v0.1.4 release**
 
 **the database owns the schema, Python owns the things SQL is bad at**. 
 It leans on [PostgREST](https://postgrest.org)
@@ -360,7 +360,7 @@ SMTP_PASSWORD`.
 **OAuth** — add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (and/or GitHub
 equivalents) to `.env`. Providers without credentials are silently disabled.
 
-### Custom JWT claims
+### Custom JWT claims [shipped v0.1.3]
 
 Register a `claims_provider` to inject application-specific claims into every
 access token minted by the auth endpoints. Each provider is an async callable
@@ -390,6 +390,38 @@ Notes:
   bug, not a missing welcome email.
 - Refresh re-collects claims, so a token rotated via `/auth/v1/refresh`
   reflects current state.
+
+### Reading the caller in your routes [shipped v0.1.4]
+
+Application code mounts its own routers alongside supython's. To gate an
+endpoint on a valid bearer token — or to read custom claims out of it —
+use the public dependencies re-exported from `supython.auth`:
+
+```python
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends
+from supython.auth import current_claims, current_user_id
+
+router = APIRouter(prefix="/api/v1")
+
+
+@router.get("/me")
+async def me(user_id: Annotated[UUID, Depends(current_user_id)]) -> dict:
+    return {"user_id": str(user_id)}
+
+
+@router.get("/whoami")
+async def whoami(claims: Annotated[dict, Depends(current_claims)]) -> dict:
+    # Read whatever your `claims_provider` injected — e.g. org_id.
+    return {"user_id": claims["sub"], "org_id": claims.get("org_id")}
+```
+
+Both dependencies raise `401 Unauthorized` when the `Authorization` header
+is missing, malformed, or carries an invalid/expired token. `current_user_id`
+is a thin convenience over `current_claims` — pick the dict version when you
+need any claim beyond the user UUID.
 
 ### Auth hardening settings (`.env`)
 
