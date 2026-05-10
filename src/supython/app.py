@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__, db, jwks
 from .admin import router as admin_api_router
 from .admin import spa as admin_spa
+from .auth import claims as auth_claims
 from .auth.router import router as auth_router
 from .extensions import load_extensions
 from .settings_module import UserSettings, load_user_settings
@@ -155,6 +156,7 @@ def create_app() -> FastAPI:
     app.on_signup = _make_hook_decorator("signup")
     app.on_login = _make_hook_decorator("login")
     app.on_logout = _make_hook_decorator("logout")
+    app.claims_provider = auth_claims.register
 
     return app
 

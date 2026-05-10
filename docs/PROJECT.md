@@ -396,7 +396,43 @@ supython issues RS256 JWTs (ES256 optional) with these claims:
 - `aud` — must equal `PGRST_JWT_AUD` for PostgREST to accept it.
 - `email` — convenience claim exposed via `auth.email()`.
 
-Custom claims may be added via `tokens.issue_access_token(extra_claims=…)`.
+Custom claims are added via the `@app.claims_provider` extension point.
+Each provider is an async callable `(user, conn) -> dict` whose return
+value is merged into every access token minted by `signup`,
+`password_grant`, `refresh_grant`, and the magic-link / OTP / OAuth flows.
+
+```python
+@app.claims_provider
+async def add_org(user, conn):
+    org_id = await conn.fetchval(
+        "select org_id from public.memberships where user_id = $1", user.id
+    )
+    return {"org_id": str(org_id)} if org_id else {}
+```
+
+Contract:
+
+- Reserved JWT claims (`sub`, `email`, `role`, `aud`, `iat`, `exp`,
+  `jti`) cannot be overridden — they are filtered out of every
+  provider's return value.
+- Providers run on the **service-role** connection used by the auth
+  flow, so they can read tables that RLS would block during issuance
+  (e.g. a `user_roles` lookup keyed by a brand-new user). Treat the
+  function as privileged — same posture as a Postgres `security
+  definer` routine, including SQL-injection hygiene on `user.email`
+  and friends.
+- A provider raising propagates and aborts issuance: a missing claim
+  is a silent authz bug, not a missing welcome email. (This is the
+  one place where the contract diverges from `hooks.fire`, which
+  swallows on purpose.)
+- `refresh_grant` re-collects claims on every refresh, so providers
+  always see current state (e.g. role/org changes since the last
+  issue).
+
+Library users that need ad-hoc, request-local claims can still call
+`tokens.issue_access_token(extra_claims=…)` directly — but the
+registered provider is the supported extension point for the
+endpoint flows.
 
 ### 8.2 Key material
 

@@ -37,7 +37,7 @@ Shipped [v0.1.2]:
 **Jobs & cron**
 - **Job queue** — Postgres-backed (`SELECT FOR UPDATE SKIP LOCKED`), idempotent enqueue, retry with backoff
 - **Cron scheduling** — `pg_cron` (primary) or in-process `croniter` fallback
-- **Generic hooks** — `@app.on_signup` / `@app.on_login` lifecycle hooks
+- **Generic hooks** — `@app.on_signup` / `@app.on_login` lifecycle hooks; `@app.claims_provider` for custom JWT claims
 - **`supython worker run`** — long-running worker with graceful SIGTERM drain
 
 **Operations & security**
@@ -359,6 +359,37 @@ SMTP_PASSWORD`.
 
 **OAuth** — add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (and/or GitHub
 equivalents) to `.env`. Providers without credentials are silently disabled.
+
+### Custom JWT claims
+
+Register a `claims_provider` to inject application-specific claims into every
+access token minted by the auth endpoints. Each provider is an async callable
+`(user, conn) -> dict` whose return value is merged into the token payload —
+on signup, password login, refresh, magic-link, OTP, and OAuth callbacks.
+
+```python
+from supython.app import app
+
+@app.claims_provider
+async def add_org(user, conn):
+    org_id = await conn.fetchval(
+        "select org_id from public.memberships where user_id = $1", user.id
+    )
+    return {"org_id": str(org_id)} if org_id else {}
+```
+
+Notes:
+
+- Reserved JWT claims (`sub`, `email`, `role`, `aud`, `iat`, `exp`, `jti`)
+  cannot be overridden — they are filtered out automatically.
+- Providers run on the **service-role** connection used by the auth flow, so
+  they can read tables that RLS would block during issuance. Treat the
+  function as privileged code (same posture as a Postgres `security definer`
+  routine — sanitize any user-supplied input).
+- A provider that raises aborts issuance: a missing claim is a silent authz
+  bug, not a missing welcome email.
+- Refresh re-collects claims, so a token rotated via `/auth/v1/refresh`
+  reflects current state.
 
 ### Auth hardening settings (`.env`)
 

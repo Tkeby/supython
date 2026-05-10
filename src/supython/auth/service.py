@@ -14,6 +14,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from .. import mail, passwords, tokens
 from ..mailer import EmailMessage
 from ..settings import get_settings
+from . import claims
 from .schemas import UserResponse
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,10 @@ async def _audit_log(
 async def _issue_pair(
     conn: asyncpg.Connection, user: UserResponse
 ) -> tuple[str, str, int]:
-    access, ttl = tokens.issue_access_token(user.id, user.email)
+    extra = await claims.collect(user, conn)
+    access, ttl = tokens.issue_access_token(
+        user.id, user.email, extra_claims=extra or None
+    )
     refresh = tokens.issue_refresh_token()
     await conn.execute(
         "insert into auth.refresh_tokens (user_id, token) values ($1, $2)",
@@ -273,7 +277,10 @@ async def refresh_grant(
             new_refresh,
             refresh_token,
         )
-    access, ttl = tokens.issue_access_token(user.id, user.email)
+    extra = await claims.collect(user, conn)
+    access, ttl = tokens.issue_access_token(
+        user.id, user.email, extra_claims=extra or None
+    )
     return user, access, new_refresh, ttl
 
 
