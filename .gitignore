@@ -31,6 +31,7 @@ dev-app/functions/__pycache__/
 dev-app/.tmp/
 
 .references/
+.references/*.md
 .claude/
 
 ts-sdk/node_modules/
