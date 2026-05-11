@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "supython"
-version = "0.1.4"
+version = "0.1.5"
 description = "A lightweight Postgres-first BaaS framework for Python"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,7 +62,7 @@ cron-inproc = [
     "croniter>=2.0",
 ]
 client = [
-    "postgrest-py>=0.16.0",
+    "postgrest>=0.16.0",
     "realtime>=2.0.0",
     "httpx>=0.28",
 ]
