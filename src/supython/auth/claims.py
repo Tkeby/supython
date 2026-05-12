@@ -1,9 +1,10 @@
 """Custom-claim providers for access-token issuance.
 
-Library users register an async callable via ``@app.claims_provider`` (or
-``claims.register``) and the auth service invokes it inside ``_issue_pair``
-just before minting the JWT. Each provider returns a ``dict`` that is
-merged into the access token's payload.
+Library users register an async callable via ``claims.register`` (typically
+imported as ``from supython.auth.claims import register as claims_provider``)
+and the auth service invokes it inside ``_issue_pair`` just before minting
+the JWT. Each provider returns a ``dict`` that is merged into the access
+token's payload.
 
 Contract (intentionally narrower than ``hooks.fire``):
 

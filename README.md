@@ -37,7 +37,7 @@ Shipped [v0.1.2]:
 **Jobs & cron**
 - **Job queue** — Postgres-backed (`SELECT FOR UPDATE SKIP LOCKED`), idempotent enqueue, retry with backoff
 - **Cron scheduling** — `pg_cron` (primary) or in-process `croniter` fallback
-- **Generic hooks** — `@app.on_signup` / `@app.on_login` lifecycle hooks; `@app.claims_provider` for custom JWT claims
+- **Generic hooks** — `@app.on_signup` / `@app.on_login` lifecycle hooks; `@claims_provider` (from `supython.auth.claims`) for custom JWT claims
 - **`supython worker run`** — long-running worker with graceful SIGTERM drain
 
 **Operations & security**
@@ -362,15 +362,20 @@ equivalents) to `.env`. Providers without credentials are silently disabled.
 
 ### Custom JWT claims [shipped v0.1.3]
 
-Register a `claims_provider` to inject application-specific claims into every
+Register a claims provider to inject application-specific claims into every
 access token minted by the auth endpoints. Each provider is an async callable
 `(user, conn) -> dict` whose return value is merged into the token payload —
 on signup, password login, refresh, magic-link, OTP, and OAuth callbacks.
 
-```python
-from supython.app import app
+Import `register` directly from `supython.auth.claims` (typically aliased to
+`claims_provider`). Don't reach for `supython.app.app` — extensions load
+*during* `create_app()`, before `app` is bound, so importing it from a
+user-side `EXTENSIONS` module is a circular import.
 
-@app.claims_provider
+```python
+from supython.auth.claims import register as claims_provider
+
+@claims_provider
 async def add_org(user, conn):
     org_id = await conn.fetchval(
         "select org_id from public.memberships where user_id = $1", user.id
@@ -414,7 +419,7 @@ async def me(user_id: Annotated[UUID, Depends(current_user_id)]) -> dict:
 
 @router.get("/whoami")
 async def whoami(claims: Annotated[dict, Depends(current_claims)]) -> dict:
-    # Read whatever your `claims_provider` injected — e.g. org_id.
+    # Read whatever your claims provider injected — e.g. org_id.
     return {"user_id": claims["sub"], "org_id": claims.get("org_id")}
 ```
 

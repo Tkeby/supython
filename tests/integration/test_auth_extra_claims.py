@@ -1,8 +1,7 @@
 """Integration tests for the claims-provider extension point.
 
-Verifies that a provider registered via ``claims.register`` (the same
-callable that ``app.claims_provider`` exposes) injects custom claims
-into the access tokens minted by ``/auth/v1/signup``,
+Verifies that a provider registered via ``claims.register`` injects
+custom claims into the access tokens minted by ``/auth/v1/signup``,
 ``/auth/v1/token``, and ``/auth/v1/refresh``.
 """
 

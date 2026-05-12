@@ -396,13 +396,16 @@ supython issues RS256 JWTs (ES256 optional) with these claims:
 - `aud` — must equal `PGRST_JWT_AUD` for PostgREST to accept it.
 - `email` — convenience claim exposed via `auth.email()`.
 
-Custom claims are added via the `@app.claims_provider` extension point.
+Custom claims are added by registering a provider via
+`supython.auth.claims.register` (typically imported as `claims_provider`).
 Each provider is an async callable `(user, conn) -> dict` whose return
 value is merged into every access token minted by `signup`,
 `password_grant`, `refresh_grant`, and the magic-link / OTP / OAuth flows.
 
 ```python
-@app.claims_provider
+from supython.auth.claims import register as claims_provider
+
+@claims_provider
 async def add_org(user, conn):
     org_id = await conn.fetchval(
         "select org_id from public.memberships where user_id = $1", user.id
