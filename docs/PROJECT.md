@@ -646,6 +646,9 @@ WebSocket.
   - `ctx.db` — live `asyncpg.Connection` **already entered** under
     `db.as_role(role, claims)` for the request; handlers await queries on
     that connection directly (e.g. fetch/fetchrow) and RLS matches PostgREST.
+  - `ctx.service_db()` — async context manager yielding a `service_role`
+    connection (RLS bypassed) directly; forwards caller
+    claims by default so `auth.uid()` stays available inside the block.
   - `ctx.user` — caller identity when a token is present / required
   - `ctx.storage` — thin client over storage + RLS via the same connection
   - `ctx.postgrest` — `httpx` client to `POSTGREST_URL` with `Authorization`
