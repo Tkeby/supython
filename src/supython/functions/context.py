@@ -11,6 +11,7 @@ rule that applies elsewhere.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -18,6 +19,7 @@ from uuid import UUID
 import asyncpg
 import httpx
 
+from .. import db as _db
 from ..mailer import EmailBackend, EmailMessage, get_mailer
 from ..settings import Settings, get_settings
 from ..storage import service as storage_service
@@ -73,9 +75,7 @@ class StorageClient:
     ``backend`` by hand.
     """
 
-    def __init__(
-        self, conn: asyncpg.Connection, backend: StorageBackend
-    ) -> None:
+    def __init__(self, conn: asyncpg.Connection, backend: StorageBackend) -> None:
         self._conn = conn
         self._backend = backend
 
@@ -120,9 +120,7 @@ class StorageClient:
         )
 
     async def get_metadata(self, *, bucket: str, path: str) -> ObjectResponse:
-        return await storage_service.get_object_metadata(
-            self._conn, bucket, path
-        )
+        return await storage_service.get_object_metadata(self._conn, bucket, path)
 
     async def sign(
         self, *, bucket: str, path: str, expires_in: int | None = None
@@ -233,6 +231,30 @@ class Ctx:
     send_email: Callable[..., Awaitable[None]]
     request: Request
     settings: Settings
+
+    def service_db(
+        self,
+        *,
+        with_user_claims: bool = True,
+    ) -> AbstractAsyncContextManager[asyncpg.Connection]:
+        """Yield a ``service_role`` connection for housekeeping inside a handler.
+
+        Convenience wrapper around :func:`supython.db.as_service_role` so user
+        code can write::
+
+            async with ctx.service_db() as conn:
+                await conn.execute("insert into audit.events ...")
+
+        instead of importing ``supython.db``. ``service_role`` bypasses RLS;
+        when the caller is authenticated the user's JWT claims are forwarded
+        to the session so helpers like ``auth.uid()`` still return the
+        caller's id inside the block. Pass ``with_user_claims=False`` to
+        suppress that and run truly impersonal admin work.
+        """
+        claims = (
+            self.user.claims if (with_user_claims and self.user is not None) else None
+        )
+        return _db.as_service_role(claims=claims)
 
 
 def build_ctx(

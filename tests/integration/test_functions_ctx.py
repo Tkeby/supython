@@ -169,6 +169,40 @@ async def test_ctx_db_rls_isolates_users(client: httpx.AsyncClient, pool: asyncp
 
 
 # ---------------------------------------------------------------------------
+# ctx.service_db()
+# ---------------------------------------------------------------------------
+
+
+async def test_ctx_service_db_bypasses_rls_and_forwards_claims(
+    client: httpx.AsyncClient, pool: asyncpg.Pool
+):
+    """ctx.service_db() sees all rows (RLS bypassed) and auth.uid() = caller."""
+    alice = await _signup(client, "alice_svc@example.com")
+    bob = await _signup(client, "bob_svc@example.com")
+
+    alice_claims = tokens.decode_access_token(alice["access_token"])
+    bob_claims = tokens.decode_access_token(bob["access_token"])
+
+    async with _db.as_role("authenticated", alice_claims) as conn:
+        await conn.execute("insert into public.todos (title) values ($1)", "alice-todo")
+    async with _db.as_role("authenticated", bob_claims) as conn:
+        await conn.execute(
+            "insert into public.todos (title) values ($1), ($2)",
+            "bob-todo-1",
+            "bob-todo-2",
+        )
+
+    r = await client.post(
+        "/functions/service_db_all",
+        headers={"authorization": f"Bearer {alice['access_token']}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 3
+    assert body["auth_uid"] == alice_claims["sub"]
+
+
+# ---------------------------------------------------------------------------
 # ctx.storage
 # ---------------------------------------------------------------------------
 
