@@ -23,7 +23,9 @@
 ###############################################################################
 # Stash the access_token; we'll send it to PostgREST as a bearer token.
 ###############################################################################
-  
+  $TOKEN=curl -sS -X POST http://localhost:8000/auth/v1/token \
+   -H 'content-type: application/json' \
+   -d '{"email":"alice@example.com","password":"password123"}' | jq -r .access_token
 
 ###############################################################################
 # 3. Create a todo. user_id defaults to auth.uid() — no need to send it.

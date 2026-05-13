@@ -360,6 +360,24 @@ SMTP_PASSWORD`.
 **OAuth** — add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (and/or GitHub
 equivalents) to `.env`. Providers without credentials are silently disabled.
 
+**Logout semantics (stateless JWT)** — `/auth/v1/logout` revokes the
+**refresh** token; the access token remains valid until its `exp` claim. This
+is the standard stateless-JWT posture (same as Supabase Auth, Auth0, Cognito):
+both supython and PostgREST verify access tokens from the JWKS with **no
+per-request DB lookup**, so there is no place to consult a server-side
+denylist without breaking that contract. The mitigation is a **short
+`ACCESS_TOKEN_TTL`** plus refresh-token revocation:
+
+- Clients must drop *both* tokens locally on logout — the access token must
+  not be reused after the user signs out.
+- A stolen access token cannot be invalidated server-side mid-flight; it
+  stops being useful at `exp`. Pick a TTL that bounds your exposure.
+- Default `ACCESS_TOKEN_TTL=3600` (1 hour) is fine for development. For
+  production, set it to **300–900 seconds** so logout / role changes
+  propagate in minutes rather than an hour. Refresh tokens are still
+  long-lived (`REFRESH_TOKEN_TTL=30d`) so users don't get prompted to log
+  in every few minutes — clients refresh transparently.
+
 ### Custom JWT claims [shipped v0.1.3]
 
 Register a claims provider to inject application-specific claims into every
@@ -432,6 +450,8 @@ need any claim beyond the user UUID.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `ACCESS_TOKEN_TTL` | `3600` | Access-token lifetime in seconds. Lower this (300–900) in production so logout / role changes propagate quickly — the access token is stateless and only stops working at `exp` |
+| `REFRESH_TOKEN_TTL` | `2592000` | Refresh-token lifetime in seconds (30 d). Refresh tokens *are* revocable via `/auth/v1/logout` |
 | `DB_STATEMENT_TIMEOUT_MS` | `30000` | Per-connection query timeout for the asyncpg pool (`0` disables) |
 | `DB_POOL_MIN_SIZE` | `1` | Minimum asyncpg pool size |
 | `DB_POOL_MAX_SIZE` | `10` | Maximum asyncpg pool size |

@@ -469,8 +469,24 @@ decision log, 2026-04-23).
 ### 8.4 Logout
 
 Logout revokes the refresh token. The access token remains valid until
-its `exp` (typically 1 hour). For immediate revocation we'd need a
-deny-list — currently out of scope.
+its `exp` (default 1 hour, `ACCESS_TOKEN_TTL`). This is the deliberate
+consequence of the stateless-verification contract in §8.2: PostgREST
+verifies tokens via JWKS with no per-request DB lookup, and supython's
+own dependencies do the same, so a server-side deny-list would have to
+be consulted on every request to be honest — undoing the symmetry
+guarantee. An asymmetric deny-list (consulted only by supython, ignored
+by PostgREST) would be worse than the current behaviour because logout
+would mean different things on different paths.
+
+Operational guidance for users:
+
+- Clients must drop *both* tokens locally on logout. The access token
+  must not be reused after sign-out.
+- Production deployments should set `ACCESS_TOKEN_TTL` to 300–900s so
+  logout / role changes propagate in minutes, not an hour. The default
+  remains 3600 for dev ergonomics.
+- A genuine deny-list could be added later behind an opt-in flag, but
+  the design must address PostgREST or it just shifts the problem.
 
 ---
 
