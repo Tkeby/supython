@@ -1355,14 +1355,22 @@ def up(
     timeout: int = typer.Option(30, help="Seconds to wait for Postgres."),
     prod: bool = typer.Option(False, "--prod", help="Use docker-compose.prod.yml."),
     worker: bool = typer.Option(False, "--worker", help="Also start the worker (prod only)."),
+    profile: list[str] = typer.Option(
+        [],
+        "--profile",
+        help="Compose profile(s) to enable. Repeatable; user-defined extension services gated by a profile come up via a final sweep.",
+    ),
 ) -> None:
     """Start Postgres + PostgREST and apply migrations.
 
     Brings the DB up first, runs migrations (which create the roles
     PostgREST needs), rotates the authenticator password, then starts PostgREST.
+    Any user-added services gated behind a compose profile come up after the
+    core services when `--profile <name>` is passed.
     """
     compose_file = _resolve_compose_file(prod)
     is_prod = compose_file == "docker-compose.prod.yml"
+    user_profiles = tuple(profile)
     configure_logging("INFO", json_format=False)
     _compose_with(compose_file, "up", "-d", "db")
     typer.echo("waiting for Postgres ...")
@@ -1379,6 +1387,8 @@ def up(
         _compose_with(compose_file, "up", "-d", "postgrest", "supython")
         if worker:
             _compose_with(compose_file, "--profile", "worker", "up", "-d", "worker")
+        if user_profiles:
+            _compose_with(compose_file, "up", "-d", profiles=user_profiles)
         typer.echo("")
         typer.echo("ready.")
         typer.echo("  postgres   localhost:54322  (bind 127.0.0.1 only)")
@@ -1386,12 +1396,18 @@ def up(
         typer.echo("  supython   http://localhost:8000")
         if worker:
             typer.echo("  worker     running (profile=worker)")
+        for p in user_profiles:
+            typer.echo(f"  profile    {p}   # user-defined services")
     else:
         _compose_with(compose_file, "up", "-d", "postgrest")
+        if user_profiles:
+            _compose_with(compose_file, "up", "-d", profiles=user_profiles)
         typer.echo("")
         typer.echo("ready.")
         typer.echo("  postgres   localhost:54322  (user/db: supython)")
         typer.echo(f"  postgrest  {s.postgrest_url}")
+        for p in user_profiles:
+            typer.echo(f"  profile    {p}   # user-defined services")
         typer.echo("  next       supython dev   # start the auth/API service")
 
 
@@ -1610,11 +1626,15 @@ def _compose(*args: str) -> None:
     _compose_with(None, *args)
 
 
-def _compose_with(file: str | None, *args: str) -> None:
-    """Run `docker compose [-f <file>] <args...>`, surfacing common errors."""
+def _compose_with(
+    file: str | None, *args: str, profiles: tuple[str, ...] = ()
+) -> None:
+    """Run `docker compose [-f <file>] [--profile <p>]... <args...>`, surfacing common errors."""
     cmd = ["docker", "compose"]
     if file:
         cmd += ["-f", file]
+    for p in profiles:
+        cmd += ["--profile", p]
     cmd += list(args)
     try:
         subprocess.run(cmd, check=True)
