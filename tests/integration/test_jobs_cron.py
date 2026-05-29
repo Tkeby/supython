@@ -108,6 +108,51 @@ async def test_sync_pg_cron_updates_existing(conn):
     assert row["job_name"] == "cleanup_job_v2"
 
 
+async def test_sync_pg_cron_refuses_empty_registry_with_existing_rows(conn):
+    """If the in-process registry is empty but jobs.cron_schedules has rows,
+    sync must refuse — proceeding would wipe every row (and unschedule every
+    pg_cron entry). This guards against a caller that forgot to import the
+    user's EXTENSIONS before syncing (e.g. an old `supython cron sync`)."""
+
+    @cron("*/5 * * * *", name="cleanup", job_name="cleanup_job")
+    async def handler(ctx, payload):
+        pass
+
+    await sync_pg_cron(conn)
+    reset_registry()  # simulate a CLI process that never imported the user's modules
+
+    with pytest.raises(ValueError, match="refusing to sync"):
+        await sync_pg_cron(conn)
+
+    # The row must still be there — the guard fires before any mutation.
+    row = await conn.fetchrow(
+        "select name from jobs.cron_schedules where name = $1", "cleanup"
+    )
+    assert row is not None
+
+
+async def test_sync_pg_cron_allow_empty_clears_rows(conn):
+    @cron("*/5 * * * *", name="cleanup", job_name="cleanup_job")
+    async def handler(ctx, payload):
+        pass
+
+    await sync_pg_cron(conn)
+    reset_registry()
+
+    await sync_pg_cron(conn, allow_empty=True)
+
+    row = await conn.fetchrow(
+        "select name from jobs.cron_schedules where name = $1", "cleanup"
+    )
+    assert row is None
+
+
+async def test_sync_pg_cron_empty_registry_and_empty_table_is_noop(conn):
+    """No definitions and no rows — the guard must not fire (legitimate
+    cold-start case where the app boots without @cron decorators)."""
+    await sync_pg_cron(conn)  # must not raise
+
+
 @pytest.mark.pg_cron
 async def test_sync_pg_cron_records_login_role(
     conn, pg_cron_available: bool

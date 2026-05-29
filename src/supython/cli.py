@@ -115,6 +115,22 @@ def _run_async(coro):  # type: ignore[no-untyped-def]
         return asyncio.run(coro)
 
 
+def _bootstrap_user_modules() -> None:
+    """Import the user's settings module + extensions so decorators register.
+
+    Mirrors ``worker_run`` and ``create_app``. CLI subcommands that read the
+    in-process registry (e.g. ``cron list``, ``cron sync``) must call this
+    first, otherwise the registry is empty and a ``cron sync`` would wipe
+    every row from ``jobs.cron_schedules``.
+    """
+    from .extensions import load_extensions
+    from .settings_module import UserSettings, load_user_settings
+
+    s = get_settings()
+    user = load_user_settings(s.settings_module) if s.settings_module else UserSettings()
+    load_extensions([*s.extensions, *user.extensions])
+
+
 @gen_cli.command("types")
 def gen_types(
     lang: str = typer.Option("py", "--lang", help="Target language (`py` or `ts`)."),
@@ -418,6 +434,7 @@ def cron_list() -> None:
     """List registered cron schedules."""
     from .jobs.registry import get_registry
 
+    _bootstrap_user_modules()
     crons = list(get_registry().iter_crons())
     if not crons:
         typer.echo("no crons registered.")
@@ -427,17 +444,29 @@ def cron_list() -> None:
 
 
 @cron_cli.command("sync")
-def cron_sync() -> None:
+def cron_sync(
+    allow_empty: bool = typer.Option(
+        False,
+        "--allow-empty",
+        help=(
+            "Allow sync to proceed when the in-process registry has no @cron "
+            "definitions but `jobs.cron_schedules` has rows. Without this "
+            "flag the sync refuses, because it would otherwise wipe every "
+            "row and unschedule every pg_cron entry."
+        ),
+    ),
+) -> None:
     """Sync registered crons with pg_cron."""
     from .jobs.cron import sync_pg_cron
 
+    _bootstrap_user_modules()
     s = get_settings()
 
     async def _run():
         conn = await asyncpg.connect(s.database_url)
         try:
             await conn.execute("set role service_role")
-            await sync_pg_cron(conn)
+            await sync_pg_cron(conn, allow_empty=allow_empty)
         finally:
             await conn.close()
 

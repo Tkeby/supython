@@ -51,7 +51,11 @@ async def _as_login_role(conn: asyncpg.Connection) -> AsyncIterator[None]:
         await conn.execute(f'set {scope}role "{prev_role}"')
 
 
-async def sync_pg_cron(conn: asyncpg.Connection) -> None:
+async def sync_pg_cron(
+    conn: asyncpg.Connection,
+    *,
+    allow_empty: bool = False,
+) -> None:
     """Upsert ``pg_cron`` schedule rows from the registry and remove stale ones.
 
     The caller is expected to have entered ``db.as_service_role()`` (or
@@ -62,18 +66,41 @@ async def sync_pg_cron(conn: asyncpg.Connection) -> None:
     initialise a session at tick time.
 
     When pg_cron is installed, errors from ``cron.schedule`` propagate
-    to the caller. 
+    to the caller.
 
     When pg_cron is NOT installed the metadata row is still upserted so
     the in-process scheduler (or a manual runner) can pick it up, and
     ``cron.schedule`` is skipped entirely.
+
+    Raises ``ValueError`` when the in-process registry has no ``@cron``
+    definitions but ``jobs.cron_schedules`` is non-empty. That mismatch
+    almost always means the caller forgot to import the user's
+    ``EXTENSIONS`` before syncing, and proceeding would wipe every row
+    (and unschedule every pg_cron entry). Pass ``allow_empty=True`` to
+    intentionally clear the table.
     """
     registry = get_registry()
+    cron_defns = list(registry.iter_crons())
+
     has_pg_cron = await conn.fetchval(
         "select exists(select 1 from pg_extension where extname = 'pg_cron')"
     )
 
-    for cron_defn in registry.iter_crons():
+    if not cron_defns and not allow_empty:
+        existing_count = await conn.fetchval(
+            "select count(*) from jobs.cron_schedules"
+        )
+        if existing_count:
+            raise ValueError(
+                f"registry has no @cron definitions but jobs.cron_schedules "
+                f"holds {existing_count} row(s) — refusing to sync, since "
+                f"this would wipe the table and unschedule every pg_cron "
+                f"entry. Pass allow_empty=True to confirm, or check that "
+                f"the module containing your @cron decorators is listed in "
+                f"EXTENSIONS / SUPYTHON_SETTINGS_MODULE."
+            )
+
+    for cron_defn in cron_defns:
         await conn.execute(
             """
             insert into jobs.cron_schedules
@@ -123,7 +150,7 @@ async def sync_pg_cron(conn: asyncpg.Connection) -> None:
                 command,
             )
 
-    registered_names = {c.name for c in registry.iter_crons()}
+    registered_names = {c.name for c in cron_defns}
     existing = await conn.fetch("select name from jobs.cron_schedules")
     for row in existing:
         if row["name"] in registered_names:

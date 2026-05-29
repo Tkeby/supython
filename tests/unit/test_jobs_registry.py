@@ -78,7 +78,7 @@ def test_job_decorator_no_payload():
 
 def test_cron_decorator_registers():
     @cron("*/5 * * * *", name="cleanup", job_name="cleanup_job")
-    async def handler(ctx):
+    async def handler(ctx, payload):
         pass
 
     reg = get_registry()
@@ -86,6 +86,74 @@ def test_cron_decorator_registers():
     assert len(crons) == 1
     assert crons[0].name == "cleanup"
     assert crons[0].cron_expr == "*/5 * * * *"
+
+
+def test_cron_decorator_auto_registers_handler():
+    """@cron must register a JobDefinition for job_name; otherwise pg_cron's
+    enqueue fires a job the worker rejects with `unknown job: <job_name>`."""
+
+    @cron("*/5 * * * *", name="cleanup", job_name="cleanup_job")
+    async def handler(ctx, payload):
+        pass
+
+    reg = get_registry()
+    defn = reg.get_latest("cleanup_job")
+    assert defn is not None, "@cron did not auto-register a job handler"
+    assert defn.handler is handler
+    assert defn.version == 1
+
+
+def test_cron_decorator_resolves_job_name_default():
+    @cron("*/5 * * * *", name="sweep")
+    async def handler(ctx, payload):
+        pass
+
+    reg = get_registry()
+    crons = list(reg.iter_crons())
+    assert crons[0].job_name == "sweep"
+    assert reg.get_latest("sweep") is not None
+
+
+def test_cron_decorator_register_handler_false():
+    @cron(
+        "*/5 * * * *",
+        name="schedule_only",
+        job_name="external",
+        register_handler=False,
+    )
+    async def handler(ctx, payload):
+        pass
+
+    reg = get_registry()
+    assert len(list(reg.iter_crons())) == 1
+    assert list(reg.iter_jobs()) == []
+
+
+def test_cron_decorator_forwards_job_kwargs():
+    @cron(
+        "*/5 * * * *",
+        name="cleanup",
+        job_name="cleanup_job",
+        accepts_payload=False,
+        max_attempts=7,
+        role="authenticated",
+        claims_from="actor_id",
+        backoff_base_s=1.5,
+        backoff_max_s=42.0,
+        queue="critical",
+    )
+    async def handler(ctx):
+        pass
+
+    defn = get_registry().get_latest("cleanup_job")
+    assert defn is not None
+    assert defn.accepts_payload is False
+    assert defn.max_attempts == 7
+    assert defn.role == "authenticated"
+    assert defn.claims_from == "actor_id"
+    assert defn.backoff_base_s == 1.5
+    assert defn.backoff_max_s == 42.0
+    assert defn.queue == "critical"
 
 
 def test_iter_jobs():
