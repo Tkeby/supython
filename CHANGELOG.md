@@ -31,6 +31,39 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ---
 
+## [0.1.9] — 2026-05-29
+
+### Fixed
+
+- `@cron(...)` now also registers the decorated function as the job
+  handler for `job_name`. Previously the decorator only wrote a
+  `CronDefinition`, so when pg_cron fired `jobs.enqueue(p_name :=
+  <job_name>)` the worker rejected the job with `unknown job:
+  <job_name>` on every tick. Pass `register_handler=False` to keep
+  the pre-fix behaviour (schedule fires a handler declared elsewhere
+  with `@job`).
+- `supython cron list` and `supython cron sync` now load the user's
+  settings module and `EXTENSIONS` before reading the registry,
+  mirroring `worker run` and the FastAPI startup path. Without the
+  bootstrap, `cron list` always printed `no crons registered` and a
+  subsequent `cron sync` would silently wipe every row from
+  `jobs.cron_schedules` and unschedule every matching pg_cron entry.
+
+### Added
+
+- `@cron(...)` accepts `register_handler` (default `True`) plus the
+  job kwargs forwarded to the auto-registered `JobDefinition`:
+  `max_attempts`, `backoff`, `backoff_base_s`, `backoff_max_s`,
+  `role`, `claims_from`, `accepts_payload`.
+- `supython cron sync --allow-empty` (and the matching
+  `sync_pg_cron(conn, allow_empty=True)` argument). Without the flag,
+  `sync_pg_cron` now refuses to act when the in-process registry is
+  empty but `jobs.cron_schedules` is non-empty — guards against a
+  forgotten extension bootstrap silently wiping production schedules.
+  The empty-registry-and-empty-table cold-start case stays a no-op.
+
+---
+
 ## [0.1.0] — 2026-05-09
 
 The first public release. Everything currently on `main` collapses
@@ -201,4 +234,5 @@ v0.1–v0.7 plus a v1.1.x admin track; see §19 decision log
 ---
 
 
+[0.1.9]: https://github.com/Tkeby/supython/releases/tag/v0.1.9
 [0.1.0]: https://github.com/Tkeby/supython/releases/tag/v0.1.0
