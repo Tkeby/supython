@@ -23,13 +23,21 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ### Breaking
 ### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+### Security
+
+---
+
+## [0.1.10] — 2026-06-12
+
+### Added
 
 - `python-dotenv` is now a direct dependency (previously only transitive via
   `pydantic-settings`), backing the new boot-time `.env` export.
 
-### Changed
-### Deprecated
-### Removed
 ### Fixed
 
 - `.env` is now exported into `os.environ` at the start of every boot path
@@ -43,8 +51,6 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
   set by an orchestrator always win, and the path is sourced from the same
   `SettingsConfigDict.env_file`. Downstream apps can delete their ad-hoc
   `load_dotenv()` boot shims. (#1)
-
-### Security
 
 ---
 
@@ -251,5 +257,6 @@ v0.1–v0.7 plus a v1.1.x admin track; see §19 decision log
 ---
 
 
+[0.1.10]: https://github.com/Tkeby/supython/releases/tag/v0.1.10
 [0.1.9]: https://github.com/Tkeby/supython/releases/tag/v0.1.9
 [0.1.0]: https://github.com/Tkeby/supython/releases/tag/v0.1.0
