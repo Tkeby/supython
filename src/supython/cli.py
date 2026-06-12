@@ -22,7 +22,7 @@ from .db_admin import rotate_role_password
 from .gen import render_types_py, render_types_ts
 from .logging_config import configure_logging
 from .scaffold import scaffold
-from .settings import Settings, get_settings
+from .settings import Settings, export_env_file, get_settings
 
 app = typer.Typer(
     help="supython — lightweight Postgres-first BaaS for Python",
@@ -126,6 +126,7 @@ def _bootstrap_user_modules() -> None:
     from .extensions import load_extensions
     from .settings_module import UserSettings, load_user_settings
 
+    export_env_file()
     s = get_settings()
     user = load_user_settings(s.settings_module) if s.settings_module else UserSettings()
     load_extensions([*s.extensions, *user.extensions])
@@ -248,6 +249,7 @@ def worker_run(
     from .jobs.worker import Worker
     from .settings_module import UserSettings, load_user_settings
 
+    export_env_file()
     s = get_settings()
     configure_logging(s.log_level, json_format=s.log_json)
     s.jobs_queue_default = queue

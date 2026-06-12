@@ -23,10 +23,27 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ### Breaking
 ### Added
+
+- `python-dotenv` is now a direct dependency (previously only transitive via
+  `pydantic-settings`), backing the new boot-time `.env` export.
+
 ### Changed
 ### Deprecated
 ### Removed
 ### Fixed
+
+- `.env` is now exported into `os.environ` at the start of every boot path
+  (`create_app`, `supython worker run`, CLI subcommands) via the shared
+  `settings.export_env_file()` helper, **before** extensions load. Previously
+  pydantic-settings loaded `.env` into the typed `Settings` model only, so
+  dynamically-named secrets read via `os.environ.get(<name>)` (the `secret_ref`
+  convention) resolved to `None` under `supython dev` / `worker run` / CLI —
+  working in containers only because docker-compose's `env_file:` injected
+  `.env` first. The export uses `override=False`, so real environment variables
+  set by an orchestrator always win, and the path is sourced from the same
+  `SettingsConfigDict.env_file`. Downstream apps can delete their ad-hoc
+  `load_dotenv()` boot shims. (#1)
+
 ### Security
 
 ---

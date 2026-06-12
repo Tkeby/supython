@@ -2,6 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
+from dotenv import load_dotenv
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -242,3 +243,33 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def export_env_file() -> None:
+    """Export the env file ``Settings`` reads into ``os.environ``.
+
+    pydantic-settings loads ``env_file`` into the typed ``Settings`` model only;
+    it never touches ``os.environ``. Code that resolves a *dynamically-named*
+    secret — one whose env var name is not known until runtime (e.g. read from a
+    DB column) and so cannot be a typed ``Settings`` field but must be read via
+    ``os.environ.get(<name>)`` — therefore sees nothing from ``.env`` when the
+    process is launched by supython itself (``supython dev``, ``worker run``, a
+    CLI subcommand). In a container it works only by accident: docker-compose's
+    ``env_file:`` injects ``.env`` into the real process environment first.
+
+    Mirror ``uvicorn --env-file``: load the same file with ``override=False`` so
+    variables already present in the real environment (set by the orchestrator)
+    always win over a checked-in ``.env``. The path is sourced from the same
+    ``SettingsConfigDict.env_file`` ``Settings`` uses, never re-hardcoded.
+    Idempotent — safe to call from every boot path; a missing file is a no-op.
+    """
+    env_file = Settings.model_config.get("env_file")
+    if not env_file:
+        return
+    encoding = Settings.model_config.get("env_file_encoding") or "utf-8"
+    paths = [env_file] if isinstance(env_file, str | Path) else list(env_file)
+    # pydantic gives the *last* listed file precedence; load_dotenv(override=
+    # False) gives the *first*-loaded value precedence — so walk in reverse to
+    # preserve that ordering while still letting the real environment win.
+    for path in reversed(paths):
+        load_dotenv(path, override=False, encoding=encoding)
