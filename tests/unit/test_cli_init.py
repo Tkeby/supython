@@ -41,8 +41,10 @@ _EXPECTED_FILES = (
     "demo/asgi.py",
     "manage.py",
     "demo/__init__.py",
-    "demo/jobs.py",
-    "demo/hooks.py",
+    "demo/jobs/__init__.py",
+    "demo/jobs/example.py",
+    "demo/hooks/__init__.py",
+    "demo/hooks/welcome.py",
 )
 
 
@@ -218,9 +220,9 @@ def test_init_force_overwrites(chdir: Path):
     assert target.read_text() != "local edit"
 
 
-def test_init_here_uses_current_dir(chdir: Path):
+def test_init_dot_uses_current_dir(chdir: Path):
     runner = CliRunner()
-    result = runner.invoke(app, ["init", "demo", "--here"])
+    result = runner.invoke(app, ["init", "demo", "."])
     assert result.exit_code == 0, result.output
 
     # The {name} Python package directory is legitimately created by
@@ -228,6 +230,35 @@ def test_init_here_uses_current_dir(chdir: Path):
     assert (chdir / "demo").is_dir()
     for rel in _EXPECTED_FILES:
         assert (chdir / rel).is_file(), f"missing {rel}"
+
+
+def test_init_dot_writes_alongside_existing_files(chdir: Path):
+    """`init name .` (explicit target) scaffolds into a non-empty dir, Django-style."""
+    runner = CliRunner()
+    (chdir / "KEEP.md").write_text("keep me")
+
+    result = runner.invoke(app, ["init", "demo", "."])
+    assert result.exit_code == 0, result.output
+
+    assert (chdir / "KEEP.md").read_text() == "keep me"
+    for rel in _EXPECTED_FILES:
+        assert (chdir / rel).is_file(), f"missing {rel}"
+
+
+def test_init_into_explicit_subdir(chdir: Path):
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "demo", "srv"])
+    assert result.exit_code == 0, result.output
+
+    project = chdir / "srv"
+    for rel in _EXPECTED_FILES:
+        assert (project / rel).is_file(), f"missing {rel}"
+
+
+def test_init_requires_name(chdir: Path):
+    runner = CliRunner()
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code != 0
 
 
 def test_template_files_present():
@@ -242,8 +273,10 @@ def test_template_files_present():
         "asgi.py.tmpl",
         "manage.py.tmpl",
         "package_init.py.tmpl",
-        "apps_jobs.py.tmpl",
-        "apps_hooks.py.tmpl",
+        "package_jobs_init.py.tmpl",
+        "apps_jobs_example.py.tmpl",
+        "package_hooks_init.py.tmpl",
+        "apps_hooks_welcome.py.tmpl",
     ):
         assert (_TEMPLATES_DIR / tmpl).is_file()
 

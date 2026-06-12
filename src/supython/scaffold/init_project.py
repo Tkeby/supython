@@ -26,18 +26,32 @@ _TEMPLATE_MAP: list[tuple[str, str]] = [
     ("asgi.py.tmpl", "{name}/asgi.py"),
     ("manage.py.tmpl", "manage.py"),
     ("package_init.py.tmpl", "{name}/__init__.py"),
-    ("apps_jobs.py.tmpl", "{name}/jobs.py"),
-    ("apps_hooks.py.tmpl", "{name}/hooks.py"),
+    ("package_jobs_init.py.tmpl", "{name}/jobs/__init__.py"),
+    ("apps_jobs_example.py.tmpl", "{name}/jobs/example.py"),
+    ("package_hooks_init.py.tmpl", "{name}/hooks/__init__.py"),
+    ("apps_hooks_welcome.py.tmpl", "{name}/hooks/welcome.py"),
 ]
 
 
-def scaffold(name: str, target: Path, *, force: bool = False) -> list[Path]:
+def scaffold(
+    name: str,
+    target: Path,
+    *,
+    force: bool = False,
+    allow_existing: bool = False,
+) -> list[Path]:
     """Write a minimal supython project into *target*.
 
-    Returns the list of paths written, in order.
-    Raises ``FileExistsError`` if *target* is non-empty and *force`` is False.
+    Returns the list of paths written, in order. Existing files are skipped
+    (never overwritten) unless *force* is set, so a re-run only tops up what is
+    missing.
+
+    Raises ``FileExistsError`` if *target* is non-empty and neither *force* nor
+    *allow_existing* is set. Pass ``allow_existing=True`` when the caller has
+    explicitly chosen an existing directory (e.g. ``supython init myapp .``):
+    the scaffold then writes alongside whatever is already there.
     """
-    if target.exists() and any(target.iterdir()) and not force:
+    if target.exists() and any(target.iterdir()) and not force and not allow_existing:
         raise FileExistsError(f"{target} is not empty. Use --force to overwrite.")
 
     target.mkdir(parents=True, exist_ok=True)
