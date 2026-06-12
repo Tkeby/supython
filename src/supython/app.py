@@ -27,7 +27,7 @@ from .body_size import BodySizeLimitMiddleware
 from .security_headers import SecurityHeadersMiddleware
 from .realtime import get_broker
 from .realtime.router import router as realtime_router
-from .settings import get_settings
+from .settings import export_env_file, get_settings
 from .storage.router import router as storage_router
 
 logger = logging.getLogger(__name__)
@@ -96,6 +96,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    export_env_file()
     settings = get_settings()
     configure_logging(settings.log_level, json_format=settings.log_json)
 
