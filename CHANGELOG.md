@@ -2,8 +2,7 @@
 
 All notable changes to supython are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
-project uses **ZeroVer** (`0.x.y`) — see `docs/PROJECT.md` §14.0 for
-what counts as a breaking change. There is no scheduled `1.0.0`; treat
+project uses **ZeroVer** (`0.x.y`). There is no scheduled `1.0.0`; treat
 every `MINOR` as a potential breaking release.
 
 Categories used per release:
