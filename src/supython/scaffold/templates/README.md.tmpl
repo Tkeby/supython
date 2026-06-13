@@ -5,17 +5,27 @@ A [supython](https://github.com/your-org/supython) project.
 ## Quick start
 
 ```bash
-cp .env.example .env
-pip install supython
-supython up   # start Postgres + PostgREST and apply migrations
-supython dev  # start the auth/API service on http://localhost:8000
+pip install -e .   # installs this project + supython (pinned in pyproject.toml)
+supython up        # start Postgres + PostgREST and apply framework migrations
+supython dev       # start the API service on http://localhost:8000
 ```
+
+`supython init` already generated a ready-to-run `.env` (gitignored) and a JWT
+keypair under `.supython/`, so the stack boots with no manual edits. Try the
+example function once it's up: `curl http://localhost:8000/functions/hello`.
 
 ## Layout
 
-- `migrations/` — SQL migration files (applied in filename order by `supython migrate`)
-- `functions/` — edge functions (one `.py` file per route, no restart required)
-- `.supython/` — generated JWT keypair and JWKS (private key is gitignored)
+- `{name}/` — your app package: `settings.py`, plus `jobs/` and `hooks/`
+  (every module in those packages is auto-imported at boot — see `settings.py`).
+- `migrations/` — your application's SQL migrations (e.g. `0001_create_todos.sql`).
+  Apply them with your migration tool of choice — [dbmate](https://github.com/amacneil/dbmate)
+  is recommended. `supython migrate` applies only supython's own framework
+  schemas (auth, storage, realtime, jobs), **not** these.
+- `functions/` — edge functions (one `.py` file per route, hot-reloaded).
+- `pyproject.toml` — declares this project and pins the supython version.
+- `.supython/` — generated JWT keypair, JWKS, and signing secrets. The private
+  key and secrets are gitignored; the public JWKS is safe to commit.
 
 ## Docs
 

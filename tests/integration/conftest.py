@@ -63,6 +63,52 @@ async def pool() -> asyncpg.Pool:
     _db._pool = None
 
 
+# The framework no longer ships a demo ``public.todos`` table — it owns only its
+# own schemas (auth, storage, realtime, jobs). Much of the integration suite
+# exercises that table, so the suite provisions it itself, acting as the
+# "client" and mirroring a scaffolded project's first migration. Idempotent so
+# it is safe across repeated sessions and any leftover state.
+_DEMO_TODOS_DDL = """
+create table if not exists public.todos (
+    id          uuid primary key default gen_random_uuid(),
+    user_id     uuid not null default auth.uid()
+                    references auth.users (id) on delete cascade,
+    title       text not null check (length(title) > 0),
+    done        boolean not null default false,
+    created_at  timestamptz not null default now()
+);
+
+alter table public.todos enable row level security;
+
+drop policy if exists "todos: owner can read"   on public.todos;
+drop policy if exists "todos: owner can insert" on public.todos;
+drop policy if exists "todos: owner can update" on public.todos;
+drop policy if exists "todos: owner can delete" on public.todos;
+
+create policy "todos: owner can read"   on public.todos for select to authenticated using      (user_id = auth.uid());
+create policy "todos: owner can insert" on public.todos for insert to authenticated with check (user_id = auth.uid());
+create policy "todos: owner can update" on public.todos for update to authenticated using      (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "todos: owner can delete" on public.todos for delete to authenticated using      (user_id = auth.uid());
+
+grant select, insert, update, delete on public.todos to authenticated;
+"""
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _demo_todos_table(pool: asyncpg.Pool):
+    """Provision a clean demo ``public.todos`` for the suite (once per session).
+
+    Drop-then-create so every session starts from a known-clean table — some
+    gen-types tests add temporary columns, and a prior aborted run could
+    otherwise leave them behind for a plain ``create table if not exists`` to
+    silently inherit.
+    """
+    async with pool.acquire() as conn:
+        await conn.execute("drop table if exists public.todos cascade")
+        await conn.execute(_DEMO_TODOS_DDL)
+    yield
+
+
 @pytest.fixture(scope="session")
 def app(pool: asyncpg.Pool):
     """FastAPI application instance shared across the session."""

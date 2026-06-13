@@ -521,8 +521,7 @@ def init(
             typer.echo(f"  cd {target.relative_to(Path.cwd())}")
         except ValueError:
             typer.echo(f"  cd {target}")
-    typer.echo("  cp .env.example .env")
-    typer.echo("  supython up && supython dev")
+    typer.echo("  supython up && supython dev   # .env and JWT keys were generated for you")
 
 
 def _keygen_init_impl(
