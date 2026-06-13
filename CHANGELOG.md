@@ -31,6 +31,48 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ---
 
+## [0.1.11] — 2026-06-13
+
+Project-initialization ergonomics. `supython init` now produces a project that
+boots with no manual setup.
+
+### Breaking
+
+- `supython init` arguments changed. The first argument is now the **importable
+  package name** (still required); the optional second argument is the **target
+  directory** (Django-style — `.` for the current directory), defaulting to
+  `./<name>`. The `--here` flag is **removed**: `supython init myapp --here`
+  becomes `supython init myapp .`.
+- The scaffolded `jobs.py` and `hooks.py` single-file seeds are replaced by
+  auto-discovered **packages** `<name>/jobs/` and `<name>/hooks/`. Every module
+  inside each package is imported at boot, so jobs and hooks can be split across
+  files. `EXTENSIONS` in `settings.py` now points at the packages (`<name>.jobs`,
+  `<name>.hooks`) rather than the old modules.
+
+### Added
+
+- `supython init` generates a ready-to-run, gitignored `.env` (from the example
+  template) so the stack boots without a manual `cp .env.example .env` step.
+- `supython init` generates a `pyproject.toml` that declares the project and
+  pins the installed supython version; install the scaffold with `pip install -e .`.
+- The scaffold seeds an example edge function (`functions/hello.py`) and an
+  example application migration (`migrations/0001_create_todos.sql`).
+
+### Changed
+
+- Re-running `supython init` is now a safe top-up: existing files are skipped,
+  not overwritten, unless `--force` is passed.
+- The generated JWT keypair and signing secrets under `.supython/` are **never**
+  overwritten — not even with `--force` — to avoid silently rotating keys and
+  invalidating live tokens, sessions, and signed URLs. Rotation has dedicated
+  homes: `supython keygen` and `supython secret rotate`.
+- The scaffolded `todos` table moved out of supython's framework migrations into
+  the project's own `migrations/`. `supython migrate` applies only supython's
+  framework schemas (auth, storage, realtime, jobs); apply your application
+  migrations with a tool of your choice (dbmate recommended).
+
+---
+
 ## [0.1.10] — 2026-06-12
 
 ### Added
@@ -257,6 +299,7 @@ v0.1–v0.7 plus a v1.1.x admin track; see §19 decision log
 ---
 
 
+[0.1.11]: https://github.com/Tkeby/supython/releases/tag/v0.1.11
 [0.1.10]: https://github.com/Tkeby/supython/releases/tag/v0.1.10
 [0.1.9]: https://github.com/Tkeby/supython/releases/tag/v0.1.9
 [0.1.0]: https://github.com/Tkeby/supython/releases/tag/v0.1.0
