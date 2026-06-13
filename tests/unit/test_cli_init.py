@@ -32,17 +32,22 @@ def chdir(tmp_path: Path):
 
 _EXPECTED_FILES = (
     "docker-compose.yml",
+    ".env",
     ".env.example",
     ".gitignore",
     "README.md",
+    "pyproject.toml",
     "functions/README.md",
-    "migrations/.gitkeep",
+    "functions/hello.py",
+    "migrations/0001_create_todos.sql",
     "demo/settings.py",
     "demo/asgi.py",
     "manage.py",
     "demo/__init__.py",
-    "demo/jobs.py",
-    "demo/hooks.py",
+    "demo/jobs/__init__.py",
+    "demo/jobs/example.py",
+    "demo/hooks/__init__.py",
+    "demo/hooks/welcome.py",
 )
 
 
@@ -218,9 +223,9 @@ def test_init_force_overwrites(chdir: Path):
     assert target.read_text() != "local edit"
 
 
-def test_init_here_uses_current_dir(chdir: Path):
+def test_init_dot_uses_current_dir(chdir: Path):
     runner = CliRunner()
-    result = runner.invoke(app, ["init", "demo", "--here"])
+    result = runner.invoke(app, ["init", "demo", "."])
     assert result.exit_code == 0, result.output
 
     # The {name} Python package directory is legitimately created by
@@ -228,6 +233,35 @@ def test_init_here_uses_current_dir(chdir: Path):
     assert (chdir / "demo").is_dir()
     for rel in _EXPECTED_FILES:
         assert (chdir / rel).is_file(), f"missing {rel}"
+
+
+def test_init_dot_writes_alongside_existing_files(chdir: Path):
+    """`init name .` (explicit target) scaffolds into a non-empty dir, Django-style."""
+    runner = CliRunner()
+    (chdir / "KEEP.md").write_text("keep me")
+
+    result = runner.invoke(app, ["init", "demo", "."])
+    assert result.exit_code == 0, result.output
+
+    assert (chdir / "KEEP.md").read_text() == "keep me"
+    for rel in _EXPECTED_FILES:
+        assert (chdir / rel).is_file(), f"missing {rel}"
+
+
+def test_init_into_explicit_subdir(chdir: Path):
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "demo", "srv"])
+    assert result.exit_code == 0, result.output
+
+    project = chdir / "srv"
+    for rel in _EXPECTED_FILES:
+        assert (project / rel).is_file(), f"missing {rel}"
+
+
+def test_init_requires_name(chdir: Path):
+    runner = CliRunner()
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code != 0
 
 
 def test_template_files_present():
@@ -242,10 +276,15 @@ def test_template_files_present():
         "asgi.py.tmpl",
         "manage.py.tmpl",
         "package_init.py.tmpl",
-        "apps_jobs.py.tmpl",
-        "apps_hooks.py.tmpl",
+        "package_jobs_init.py.tmpl",
+        "apps_jobs_example.py.tmpl",
+        "package_hooks_init.py.tmpl",
+        "apps_hooks_welcome.py.tmpl",
+        "pyproject.toml.tmpl",
     ):
         assert (_TEMPLATES_DIR / tmpl).is_file()
+    for static in ("static/functions_hello.py", "static/0001_create_todos.sql"):
+        assert (_TEMPLATES_DIR / static).is_file()
 
 
 def test_manage_py_is_executable(chdir: Path):
@@ -278,3 +317,76 @@ def test_env_example_contains_settings_module(chdir: Path):
 
     env = (chdir / "demo" / ".env.example").read_text()
     assert "SUPYTHON_SETTINGS_MODULE=demo.settings" in env
+
+
+def test_init_generates_runnable_gitignored_dotenv(chdir: Path):
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "demo"])
+    assert result.exit_code == 0, result.output
+
+    env = chdir / "demo" / ".env"
+    assert env.is_file()
+    text = env.read_text()
+    assert "DATABASE_URL=" in text
+    assert "JWT_PRIVATE_KEY_PATH=./.supython/jwt_private.pem" in text
+
+    ignore = (chdir / "demo" / ".gitignore").read_text().splitlines()
+    assert ".env" in ignore
+
+
+def test_init_emits_pyproject_pinning_supython(chdir: Path):
+    from supython import __version__
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "demo"])
+    assert result.exit_code == 0, result.output
+
+    pyproject = (chdir / "demo" / "pyproject.toml").read_text()
+    assert 'name = "demo"' in pyproject
+    assert 'include = ["demo*"]' in pyproject
+    if __version__.startswith("0.0.0"):
+        assert '"supython"' in pyproject
+    else:
+        assert f"supython>={__version__}" in pyproject
+
+
+def test_init_seeds_example_migration_and_function(chdir: Path):
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "demo"])
+    assert result.exit_code == 0, result.output
+
+    migration = (chdir / "demo" / "migrations" / "0001_create_todos.sql").read_text()
+    assert "create table if not exists public.todos" in migration
+    assert "enable row level security" in migration
+
+    hello = (chdir / "demo" / "functions" / "hello.py").read_text()
+    assert "async def handler(req, ctx)" in hello
+    # f-string braces survived verbatim (the static path does NOT run str.format)
+    assert 'f"hello, {who}"' in hello
+
+
+def test_init_force_preserves_secrets_keys_and_env(chdir: Path):
+    """--force refreshes templates but never re-mints keys/secrets or clobbers .env."""
+    runner = CliRunner()
+    runner.invoke(app, ["init", "demo"])
+    proj = chdir / "demo"
+
+    pem_before = (proj / ".supython" / "jwt_private.pem").read_bytes()
+    jwks_before = (proj / ".supython" / "jwks.json").read_text()
+    manifest_before = (proj / ".supython" / "secrets.json").read_text()
+    oauth_before = (proj / ".supython" / "secrets" / "oauth_state.v1.secret").read_text()
+
+    env_path = proj / ".env"
+    env_path.write_text("DATABASE_URL=postgresql://edited\n")  # simulate a user edit
+    (proj / "README.md").write_text("local edit")  # a template, should refresh
+
+    result = runner.invoke(app, ["init", "demo", "--force"])
+    assert result.exit_code == 0, result.output
+
+    assert (proj / ".supython" / "jwt_private.pem").read_bytes() == pem_before
+    assert (proj / ".supython" / "jwks.json").read_text() == jwks_before
+    assert (proj / ".supython" / "secrets.json").read_text() == manifest_before
+    oauth_after = (proj / ".supython" / "secrets" / "oauth_state.v1.secret").read_text()
+    assert oauth_after == oauth_before
+    assert env_path.read_text() == "DATABASE_URL=postgresql://edited\n"  # preserved
+    assert (proj / "README.md").read_text() != "local edit"  # refreshed

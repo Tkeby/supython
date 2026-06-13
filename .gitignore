@@ -29,7 +29,8 @@ dev-app/backups/
 dev-app/__pycache__/
 dev-app/functions/__pycache__/
 dev-app/.tmp/
-
+dev-app/
+examples/
 .references/
 .references/*.md
 .claude/
@@ -43,3 +44,10 @@ ts-sdk/*.log
 .tmp/
 
 admin-ui/node_modules/
+
+/.supython/secrets/
+/.supython/secrets.json
+/.supython/jwt_private.pem
+/.supython/keys/
+/.supython/keyset.json
+/.supython/jwks.json

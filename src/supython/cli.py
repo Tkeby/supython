@@ -482,28 +482,46 @@ def cron_sync(
 
 @app.command()
 def init(
-    name: str = typer.Argument(..., help="Directory name of the new project."),
-    here: bool = typer.Option(
-        False,
-        "--here",
-        help="Scaffold into the current dir instead of ./<name>.",
+    name: str = typer.Argument(
+        ..., help="Project package name — the importable Python package for the app."
+    ),
+    directory: str | None = typer.Argument(
+        None,
+        help="Target directory ('.' for the current directory). Defaults to ./<name>.",
     ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing files."),
 ) -> None:
-    """Scaffold a new supython project."""
-    target = Path.cwd() if here else Path.cwd() / name
+    """Scaffold a new supython project.
+
+    \b
+    Examples:
+      supython init myapp          create ./myapp/ and scaffold into it
+      supython init myapp .        scaffold into the current directory
+      supython init myapp ./srv    scaffold into ./srv
+    """
+    into_existing = directory is not None
+    target = Path.cwd() / name if directory is None else Path(directory).resolve()
     try:
-        written = scaffold(name=name, target=target, force=force)
+        written = scaffold(
+            name=name, target=target, force=force, allow_existing=into_existing
+        )
     except FileExistsError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     for p in written:
-        typer.echo(f"  wrote {p.relative_to(Path.cwd())}")
+        try:
+            shown = p.relative_to(Path.cwd())
+        except ValueError:
+            shown = p
+        typer.echo(f"  wrote {shown}")
     typer.echo("")
     typer.echo("next steps:")
-    typer.echo(f"  cd {target.name if not here else '.'}")
-    typer.echo("  cp .env.example .env")
-    typer.echo("  supython up && supython dev")
+    if target != Path.cwd():
+        try:
+            typer.echo(f"  cd {target.relative_to(Path.cwd())}")
+        except ValueError:
+            typer.echo(f"  cd {target}")
+    typer.echo("  supython up && supython dev   # .env and JWT keys were generated for you")
 
 
 def _keygen_init_impl(

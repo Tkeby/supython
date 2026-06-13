@@ -94,20 +94,25 @@ python -m venv .venv && source .venv/bin/activate
 pip install supython
 
 # 2. scaffold a new project
+#    `myapp` is the importable package name. An optional second argument
+#    sets the target dir (`.` = current dir); it defaults to ./myapp.
 supython init myapp
 cd myapp
-cp .env.example .env
-# Review .env — at minimum confirm AUTHENTICATOR_PASSWORD matches
-# the value PostgREST will use (docker-compose.yml injects it via env).
+# install the project (and supython, pinned in the generated pyproject.toml)
+pip install -e .
 #
-# The scaffold creates:
-#   manage.py         — Optional CLI entrypoint (sets SUPYTHON_SETTINGS_MODULE)
+# The scaffold generates a ready-to-run, gitignored .env plus a JWT keypair
+# and signing secrets under .supython/ — no manual edits needed to boot.
+# It also creates:
+#   pyproject.toml    — declares this project, pins the supython version
 #   myapp/settings.py — declare EXTENSIONS, EXTRA_ROUTERS, EXTRA_MIDDLEWARE
-#   myapp/jobs.py     — example @job seed (register your background jobs here)
-#   myapp/hooks.py    — example @on("signup") seed (lifecycle hooks)
+#   myapp/jobs/       — package of @job / @cron modules (all auto-imported)
+#   myapp/hooks/      — package of @on(...) lifecycle hooks (all auto-imported)
 #   myapp/asgi.py     — optional entrypoint for uvicorn/gunicorn
+#   functions/hello.py            — example edge function (GET /functions/hello)
+#   migrations/0001_create_todos.sql — example app migration (apply with dbmate)
 
-# 3. boot Postgres + PostgREST and run migrations (one command)
+# 3. boot Postgres + PostgREST and apply supython's framework migrations
 supython up
 
 # 4. run the auth/API service (separate terminal)
@@ -131,6 +136,10 @@ You should now have:
 | Postgres   | `postgres://supython:supython@localhost:54322/supython` |
 
 ## End-to-end smoke test
+
+This uses the scaffolded `todos` table, so first apply the example app migration
+(`migrations/0001_create_todos.sql`) with [dbmate](https://github.com/amacneil/dbmate)
+or your migration tool of choice — `supython migrate` only handles framework schemas.
 
 ```bash
 # sign up
@@ -473,128 +482,31 @@ need to edit SQL.
 
 ```
  supython/
- ├── manage.py                       # optional cli entrypoint (sets SUPYTHON_SETTINGS_MODULE)
- ├── docker-compose.yml              # Postgres + PostgREST (dev stack)
- ├── docker-compose.prod.yml         # hardened single-host production stack
- ├── docker-compose.test.yml         # dedicated test Postgres on port 54323
- ├── Caddyfile                       # reverse-proxy TLS for prod
- ├── <name>/                         # your Python package
- │   ├── __init__.py
- │   ├── settings.py                 # project settings (EXTENSIONS, EXTRA_ROUTERS, …)
- │   ├── asgi.py                     # optional ASGI entrypoint (uvicorn <name>.asgi:app)
- │   ├── jobs.py                     # example @job seed
- │   └── hooks.py                    # example @on("signup") seed
- ├── migrations/
- │   ├── 0001_extensions_and_roles.sql      # anon/authenticated/service_role/authenticator
- │   ├── 0002_auth_schema.sql               # auth.users, auth.refresh_tokens, auth.uid()
- │   ├── 0003_demo_todos.sql                # the demo table + RLS policies
- │   ├── 0004_auth_v0_2.sql                # identities, one_time_tokens, audit_log
- │   ├── 0005_storage_schema.sql            # storage.buckets + storage.objects
- │   ├── 0006_realtime_schema.sql           # realtime schema, trigger, enable() helper
- │   ├── 0007_jobs_schema.sql               # jobs queue, cron_schedules, enqueue/claim_next
- │   ├── 0008_jobs_last_error.sql           # last_error column on jobs.jobs
- │   ├── 0009_auth_rate_limits.sql          # auth fixed-window rate-limit counters
- │   ├── 0010_worker_heartbeat.sql          # worker heartbeat for /readyz
- │   ├── 0011_admin_schema.sql              # admin.admin_users, sessions, audit
- │   ├── 0012_auth_banned_until.sql         # banned_until on auth.users
- │   ├── 0013_email_templates.sql            # auth.email_templates
- │   ├── 0014_realtime_payload_warning.sql   # >8KB payload warning counter
- │   └── 0015_backups_schema.sql             # backups metadata
- ├── examples/
- │   ├── todos.http                  # HTTP smoke tests (auth + PostgREST)
- │   ├── storage.http                # storage upload / signed URL examples
- │   ├── functions.http              # edge-function call examples
- │   └── chat.html                   # two-browser realtime demo (vanilla JS, zero deps)
- ├── docs/
- │   ├── PROJECT.md                  # architecture + roadmap (single source of truth)
- │   ├── Installation.md             # full install guide (dev, prod, managed Postgres)
- │   └── admin-ui/
- │       ├── admin-surface-plan.md   # admin implementation plan + phase status
- │       └── admin-surface.md        # admin architecture + contracts
- ├── tests/
- │   ├── conftest.py                 # cross-tree fixtures (keys, capturing mailer)
- │   ├── _keys.py                    # JWT-forging helpers
- │   ├── fixtures/                   # test function modules, etc.
- │   ├── unit/                       # pure-Python tests (~6s, no Docker)
- │   │   ├── test_admin_session.py
- │   │   ├── test_admin_service_db.py
- │   │   └── ...
- │   └── integration/                # full ASGI + Postgres on port 54323
- │       ├── conftest.py             # pool, app, client, autouse DB cleaners
- │       ├── test_auth_signup_login.py
- │       ├── test_admin_auth.py
- │       ├── test_admin_auth_users.py
- │       ├── test_admin_db_rows.py
- │       ├── test_admin_jobs.py
- │       ├── test_admin_ops_backups.py
- │       ├── test_admin_storage.py
- │       ├── test_postgrest_rls.py
- │       ├── test_realtime_ws.py
- │       └── ...
- ├── admin-ui/                       # Vue 3 + Vite SPA (built → src/supython/admin/static/)
- │   └── src/
- │       ├── api/                    # single fetch seam
- │       ├── components/             # shell, data, editors, feedback
- │       ├── composables/            # useResource, useTable, useConfirm, useImpersonate, …
- │       ├── stores/                 # auth, ui
- │       ├── views/                  # Dashboard, db/, auth/, storage/, functions/, …
- │       └── router/
- └── src/supython/
-     ├── __init__.py                 # single version string
-     ├── settings.py                 # pydantic-settings, .env-driven
-     ├── db.py                       # asyncpg pool + lifespan + as_role() / as_service_role()
-     ├── mailer.py                   # ConsoleBackend / SmtpBackend
-     ├── tokens.py                   # RS256/ES256 JWT + JWKS
-     ├── passwords.py                # argon2id
-     ├── migrate.py                  # ~50-line SQL migration runner
-     ├── app.py                      # FastAPI factory
-     ├── cli.py                      # typer: up, dev, keygen, admin, worker, test, …
-     ├── extensions.py               # eager-import dotted module paths at boot
-     ├── settings_module.py          # user settings (EXTENSIONS, EXTRA_ROUTERS, …)
-     ├── health.py                   # /livez, /readyz, /health endpoints
-     ├── logging_config.py           # structured JSON log setup
-     ├── security_headers.py         # HSTS, CSP, etc.
-     ├── body_size.py                # request body size guards
-     ├── jwks.py                     # JWKS generation + rotation helpers
-     ├── keyset.py                   # asymmetric key rotation manifest
-     ├── secretset.py                # symmetric secret rotation manifest
-     ├── hooks.py                    # generic hook system: on() / fire()
-     ├── mail.py                     # email send with job-retry fallback
-     ├── auth/
-     │   ├── schemas.py
-     │   ├── service.py              # full auth layer: signup / OAuth / OTP / recover …
-     │   ├── router.py               # all /auth/v1/* routes
-     │   └── providers/              # Google, GitHub, OAuth2 helpers
-     ├── storage/
-     │   ├── backends.py             # LocalBackend, S3Backend
-     │   ├── service.py
-     │   └── router.py               # /storage/v1/*
-     ├── functions/
-     │   ├── loader.py               # filesystem discovery + hot reload
-     │   └── router.py               # /functions/v1/*
-     ├── realtime/
-     │   ├── protocol.py             # Phoenix Channels encode/decode
-     │   ├── broker.py               # fan-out engine with RLS filtering
-     │   ├── websocket.py            # WS route with JWT auth
-     │   └── router.py               # /realtime/v1/*
-     ├── jobs/
-     │   ├── registry.py             # @job / @cron decorator store
-     │   ├── service.py              # enqueue, claim_next, mark_*
-     │   ├── worker.py               # long-running poll/dispatch/drain loop
-     │   ├── cron.py                 # pg_cron sync + InProcScheduler
-     │   └── router.py               # /jobs/v1/*
-     ├── admin/
-     │   ├── session.py              # admin cookie session (SHA-256 hashed, 8h TTL)
-     │   ├── deps.py                 # require_admin dependency
-     │   ├── spa.py                  # static SPA mount + index.html fallback
-     │   ├── schemas.py              # shared Pydantic models
-     │   ├── audit.py                # admin audit log writer
-     │   ├── static/                 # pre-built Vue 3 SPA bundle (committed)
-     │   └── api/                    # /admin/api/v1/* route handlers
-     ├── backups/                    # pg_dump wrapper + restore
-     ├── gen/                        # supython gen types --lang py|ts
-     ├── scaffold/                   # supython init templates
-     └── client/                     # Python SDK (optional [client] extra)
+ ├── src/supython/            # the FastAPI service + CLI (the published package)
+ │   ├── app.py               # FastAPI factory
+ │   ├── cli.py               # typer CLI: init, up, dev, worker, migrate, gen, …
+ │   ├── db.py                # asyncpg pool + as_role() / as_service_role()
+ │   ├── settings.py          # pydantic-settings, .env-driven
+ │   ├── tokens.py            # RS256/ES256 JWT + JWKS
+ │   ├── migrate.py           # ~50-line SQL migration runner
+ │   ├── migrations/          # framework schema (auth, storage, realtime, jobs, …)
+ │   ├── auth/                # /auth/v1/*       — signup, OAuth, OTP, recovery
+ │   ├── storage/             # /storage/v1/*    — local + S3 backends
+ │   ├── functions/           # /functions/v1/*  — filesystem-discovered handlers
+ │   ├── realtime/            # /realtime/v1/*   — Phoenix Channels over LISTEN/NOTIFY
+ │   ├── jobs/                # /jobs/v1/*       — queue, worker, pg_cron scheduling
+ │   ├── admin/               # /admin/api/v1/*  + the built Vue SPA (static/)
+ │   ├── backups/             # pg_dump wrapper + restore
+ │   ├── gen/                 # `supython gen types --lang py|ts`
+ │   ├── scaffold/            # `supython init` templates
+ │   └── client/              # optional Python SDK ([client] extra)
+ ├── admin-ui/                # Vue 3 + Vite SPA, built → src/supython/admin/static/
+ ├── ts-sdk/                  # @supython/sdk — TypeScript SDK
+ ├── dev-app/                 # scaffolded sample project for local development
+ ├── examples/                # .http smoke tests + chat.html realtime demo
+ ├── tests/                   # unit/ (no Docker) + integration/ (Postgres :54323)
+ ├── Dockerfile
+ └── pyproject.toml
 ```
 
 ## Plugins & extensions
@@ -634,10 +546,10 @@ supython down               # stop the stack (keeps data)
 supython down --prod        # stop the prod stack
 supython reset              # stop the stack and DELETE the volume (destructive)
 supython reset --prod       # stop prod stack and DELETE volumes
-supython migrate            # apply pending SQL migrations
+supython migrate            # apply supython's framework migrations (auth, storage, …)
 supython info               # print resolved settings
 supython doctor             # diagnose roles, extensions, JWKS, grants, migration drift
-supython init <name>        # scaffold a new supython project
+supython init <pkg> [dir]   # scaffold a project (pkg = package name; dir defaults to ./<pkg>)
 supython gen types --lang py --out db_schema.py   # emit typed dataclasses + TypedDicts
 supython gen types --lang ts --out types.ts   # emit TypeScript Database interface
 
@@ -759,25 +671,6 @@ unit tests always run in isolation.
 
 **CI:** runners with Docker run `supython test up && supython test run`;
 runners without Docker run `pytest tests/unit` for a meaningful subset.
-
-## Roadmap
-
-- ✅ Email/password auth, PostgREST contract, RLS demo
-- ✅ OAuth, password reset, magic link, OTP, reuse detection, email backend, test suite
-- ✅ Storage (S3/local) with RLS-on-metadata, edge-style functions from a `functions/` directory; `db.as_role(role, claims)` helper; `supython init` scaffold; `supython gen types --lang py`
-- ✅ Realtime over `LISTEN/NOTIFY` with RLS-aware fan-out; Phoenix Channels wire format; broadcast + presence; `examples/chat.html` demo
-- ✅ Job queue worker + `pg_cron` scheduling + hooks + CLI management commands
-- ✅ Grooming + security foundation: unified versioning, CORS closed by default, RS256 JWT, rate limiting, `supython doctor`, pool sizing, statement timeout
-- ✅ Production observable: structured JSON logs, `/livez`/`/readyz`/`/health`, security headers, input size guards, audit log completeness, OAuth PKCE, secret rotation runbooks
-- ✅ (partial) Multi-arch Docker images, admin control plane (Vue 3 SPA — database, auth, storage, functions, realtime, jobs, backups, log tail), CI buildx workflow; benchmarks + security audit pass + dependency budget CI remaining
-- *(deferred)* — Realtime v2 over logical replication
-- ✅ **TypeScript SDK** — `@supython/sdk` wrapping `@supabase/postgrest-js` + `@supabase/realtime-js` 
-
-### Future
-
-- **Admin control plane** polish (tests + remaining DoD items)
-- **Realtime v2** — logical replication (demand-driven; swap when trigger overhead or >8KB payload data warrants it)
-- **Prometheus `/metrics`** + **OpenTelemetry** — optional extras
 
 ## License
 

@@ -10,7 +10,11 @@ Conventional uppercase attributes:
                                    so ``@job`` / ``@cron`` / ``@on``
                                    decorators register before the
                                    FastAPI app builds and before the
-                                   worker starts.
+                                   worker starts. A *package* path (the
+                                   default ``{name}.jobs`` / ``{name}.hooks``
+                                   below) imports every module inside it,
+                                   so you can split jobs and hooks across
+                                   as many files as you like.
 - ``EXTRA_ROUTERS``     list[str]  ``"module.path:router_symbol"``
                                    strings, mounted via
                                    ``app.include_router``.

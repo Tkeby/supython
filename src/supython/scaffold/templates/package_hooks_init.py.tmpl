@@ -1,0 +1,8 @@
+"""Auth hooks for {name}.
+
+This is a package, not a single module. Because ``settings.EXTENSIONS`` lists
+``"{name}.hooks"``, supython imports *every* non-underscore ``.py`` file in this
+directory at boot — so the ``@on`` decorators in each file register without any
+extra wiring. Add as many hook modules as you like; drop a new file in and it is
+picked up automatically.
+"""

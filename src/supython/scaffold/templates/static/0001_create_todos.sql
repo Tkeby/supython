@@ -1,6 +1,13 @@
--- A trivial todos table the spike uses to demonstrate the whole point:
--- ZERO Python CRUD code. Reads, writes, filters, ordering, pagination —
--- all served by PostgREST under RLS.
+-- Example application migration: a per-user todos table.
+--
+-- Demonstrates the supython RLS pattern — owner-scoped rows that PostgREST
+-- serves with ZERO Python CRUD code: reads, writes, filters, ordering and
+-- pagination all run under row-level security.
+--
+-- `supython migrate` applies only the framework's own schemas (auth, storage,
+-- realtime, jobs). Application migrations like this one are yours to apply —
+-- dbmate is the recommended runner (raw SQL, single binary). This file is
+-- plain idempotent SQL, so any runner (or psql) works.
 
 create table if not exists public.todos (
     id          uuid primary key default gen_random_uuid(),

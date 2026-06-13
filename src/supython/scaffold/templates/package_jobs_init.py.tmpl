@@ -1,0 +1,8 @@
+"""Background jobs for {name}.
+
+This is a package, not a single module. Because ``settings.EXTENSIONS`` lists
+``"{name}.jobs"``, supython imports *every* non-underscore ``.py`` file in this
+directory at boot — so the ``@job`` / ``@cron`` decorators in each file register
+without any extra wiring. Add as many job modules as you like; drop a new file
+in and it is picked up automatically.
+"""

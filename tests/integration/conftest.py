@@ -28,9 +28,41 @@ from httpx import ASGITransport
 os.environ.setdefault("OAUTH_STATE_SECRET", "a" * 48)
 os.environ.setdefault("STORAGE_SIGNED_URL_SECRET", "a" * 48)
 
+# Backups: run in host mode for the suite. The handler tests mock pg_dump, so
+# nothing is shelled out — host mode just lets ``_build_args`` succeed without a
+# configured container (the product default ``BACKUP_VIA=docker`` requires
+# ``BACKUP_DOCKER_CONTAINER``, which the test environment has no reason to set).
+os.environ.setdefault("BACKUP_VIA", "host")
+
 from supython import db as _db
 from supython.app import create_app
 from supython.settings import get_settings
+
+
+@pytest.fixture(autouse=True)
+def _isolate_secrets(tmp_path, monkeypatch):
+    """Redirect the symmetric-secret manifest to a temp dir for every test.
+
+    Without this, integration tests read and *mutate* the repo's real
+    ``./.supython/secrets.json``: the storage and OAuth rotation tests call
+    ``secretset.rotate``/``activate`` against it, which (a) drifts committed
+    crypto state — leaving stray ``*.secret`` files — and (b) makes the storage
+    rotation test flake, since its result depends on accumulated state plus an
+    ``lru_cache`` populated with real wall-clock time before the test patches
+    ``_now``. With an empty manifest the signed-URL/state code falls back to the
+    legacy ``*_SECRET`` env vars set above, so non-rotation tests are unaffected.
+
+    Mirrors the unit conftest's ``JWT_KEYSET_MANIFEST_PATH`` isolation.
+    """
+    from supython import secretset
+
+    monkeypatch.setenv("SECRETS_DIR", str(tmp_path / "secrets"))
+    monkeypatch.setenv("SECRETS_MANIFEST_PATH", str(tmp_path / "secrets.json"))
+    get_settings.cache_clear()
+    secretset.clear_cache()
+    yield
+    get_settings.cache_clear()
+    secretset.clear_cache()
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -61,6 +93,52 @@ async def pool() -> asyncpg.Pool:
     yield p
     await p.close()
     _db._pool = None
+
+
+# The framework no longer ships a demo ``public.todos`` table — it owns only its
+# own schemas (auth, storage, realtime, jobs). Much of the integration suite
+# exercises that table, so the suite provisions it itself, acting as the
+# "client" and mirroring a scaffolded project's first migration. Idempotent so
+# it is safe across repeated sessions and any leftover state.
+_DEMO_TODOS_DDL = """
+create table if not exists public.todos (
+    id          uuid primary key default gen_random_uuid(),
+    user_id     uuid not null default auth.uid()
+                    references auth.users (id) on delete cascade,
+    title       text not null check (length(title) > 0),
+    done        boolean not null default false,
+    created_at  timestamptz not null default now()
+);
+
+alter table public.todos enable row level security;
+
+drop policy if exists "todos: owner can read"   on public.todos;
+drop policy if exists "todos: owner can insert" on public.todos;
+drop policy if exists "todos: owner can update" on public.todos;
+drop policy if exists "todos: owner can delete" on public.todos;
+
+create policy "todos: owner can read"   on public.todos for select to authenticated using      (user_id = auth.uid());
+create policy "todos: owner can insert" on public.todos for insert to authenticated with check (user_id = auth.uid());
+create policy "todos: owner can update" on public.todos for update to authenticated using      (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "todos: owner can delete" on public.todos for delete to authenticated using      (user_id = auth.uid());
+
+grant select, insert, update, delete on public.todos to authenticated;
+"""
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _demo_todos_table(pool: asyncpg.Pool):
+    """Provision a clean demo ``public.todos`` for the suite (once per session).
+
+    Drop-then-create so every session starts from a known-clean table — some
+    gen-types tests add temporary columns, and a prior aborted run could
+    otherwise leave them behind for a plain ``create table if not exists`` to
+    silently inherit.
+    """
+    async with pool.acquire() as conn:
+        await conn.execute("drop table if exists public.todos cascade")
+        await conn.execute(_DEMO_TODOS_DDL)
+    yield
 
 
 @pytest.fixture(scope="session")
