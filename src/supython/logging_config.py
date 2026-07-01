@@ -179,18 +179,29 @@ class RequestLoggingMiddleware:
 
         rid = get_request_id()
 
+        # Capture a bounded prefix of the request body for diagnostic logging
+        # WITHOUT altering the byte stream the inner app receives. Each ASGI
+        # message is forwarded through untouched while up to
+        # _REQUEST_LOG_MAX_BODY_BYTES is copied aside for the log record.
+        #
+        # This must never pre-read or rewrite the body. The previous approach
+        # eagerly drained the whole request, kept only the first
+        # _REQUEST_LOG_MAX_BODY_BYTES, then replayed *that truncated buffer* to
+        # the app — silently corrupting every request whose body exceeded the
+        # cap (multipart file uploads, large JSON payloads: the trailing bytes,
+        # and with them the multipart closing boundary, never reached the
+        # handler). Teeing keeps the stream intact, preserves true streaming
+        # (storage/functions are never buffered whole), and still forwards
+        # http.disconnect so streaming responses can detect client hangups.
         body_chunks: list[bytes] = []
         body_size = 0
         body_truncated = False
 
-        async def _drain_body() -> None:
+        async def _receive() -> dict[str, Any]:
             nonlocal body_size, body_truncated
-            while True:
-                msg = await receive()
-                if msg["type"] != "http.request":
-                    continue
+            msg = await receive()
+            if msg["type"] == "http.request":
                 chunk = msg.get("body", b"")
-                more = msg.get("more_body", False)
                 if chunk and body_size < _REQUEST_LOG_MAX_BODY_BYTES:
                     space = _REQUEST_LOG_MAX_BODY_BYTES - body_size
                     if len(chunk) > space:
@@ -200,29 +211,7 @@ class RequestLoggingMiddleware:
                     else:
                         body_chunks.append(chunk)
                         body_size += len(chunk)
-                if not more:
-                    break
-
-        await _drain_body()
-
-        full_body = b"".join(body_chunks)
-        body_consumed = False
-
-        async def _receive() -> dict[str, Any]:
-            nonlocal body_consumed
-            if not body_consumed:
-                body_consumed = True
-                return {
-                    "type": "http.request",
-                    "body": full_body,
-                    "more_body": False,
-                }
-            # Body already delivered. Forward subsequent calls to the real
-            # receive() so callers awaiting http.disconnect (e.g. Starlette's
-            # StreamingResponse.listen_for_disconnect) actually block on the
-            # event loop instead of busy-looping on synchronous returns,
-            # which would starve the streaming task and hang the request.
-            return await receive()
+            return msg
 
         status_code: int = 0
         response_size: int = 0
@@ -270,6 +259,9 @@ class RequestLoggingMiddleware:
             is_server_error = 500 <= status_code < 600 or exc_info is not None
 
             if is_server_error:
+                # The bounded prefix the app actually consumed (see the tee in
+                # _receive above); empty if the handler errored before reading.
+                full_body = b"".join(body_chunks)
                 fields["request_body"] = full_body.decode("utf-8", errors="replace")
                 if body_truncated:
                     fields["body_truncated"] = True

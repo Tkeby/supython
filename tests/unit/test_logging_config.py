@@ -247,6 +247,24 @@ async def _run_asgi(
     return captured
 
 
+async def _consume_body(receive) -> bytes:
+    """Read the request body the way a real handler / Starlette would.
+
+    The logging middleware tees the body as it is consumed, so tests that
+    assert on the logged ``request_body`` must actually pull it through
+    ``receive`` rather than relying on the middleware to pre-drain it.
+    """
+    body = bytearray()
+    while True:
+        msg = await receive()
+        if msg["type"] != "http.request":
+            continue
+        body.extend(msg.get("body", b""))
+        if not msg.get("more_body", False):
+            break
+    return bytes(body)
+
+
 @pytest.mark.asyncio
 async def test_request_logging_emits_info_on_200():
     async def app(scope, receive, send):
@@ -281,6 +299,7 @@ async def test_request_logging_emits_info_on_200():
 @pytest.mark.asyncio
 async def test_request_logging_emits_error_on_500():
     async def app(scope, receive, send):
+        await _consume_body(receive)
         await send({"type": "http.response.start", "status": 500, "headers": []})
         await send({"type": "http.response.body", "body": b"error"})
 
@@ -303,6 +322,7 @@ async def test_request_logging_emits_error_on_500():
 @pytest.mark.asyncio
 async def test_request_logging_captures_traceback_on_exception():
     async def app(scope, receive, send):
+        await _consume_body(receive)
         raise RuntimeError("boom")
 
     records = []
@@ -383,6 +403,7 @@ async def test_request_logging_passes_through_websocket():
 @pytest.mark.asyncio
 async def test_request_logging_body_truncation():
     async def app(scope, receive, send):
+        await _consume_body(receive)
         await send({"type": "http.response.start", "status": 500, "headers": []})
         await send({"type": "http.response.body", "body": b"err"})
 
@@ -397,6 +418,64 @@ async def test_request_logging_body_truncation():
     fields = records[0].extra_fields
     assert fields["body_truncated"] is True
     assert len(fields["request_body"]) == _REQUEST_LOG_MAX_BODY_BYTES
+
+
+@pytest.mark.asyncio
+async def test_request_logging_forwards_full_body_over_cap():
+    """The app must receive the COMPLETE body even when it exceeds the log cap.
+
+    Regression: the middleware used to replay only the first
+    _REQUEST_LOG_MAX_BODY_BYTES to the app, corrupting large uploads and JSON
+    (e.g. a multipart file part cut off before its closing boundary, so the
+    parser dropped it entirely).
+    """
+    seen: dict[str, bytes] = {}
+
+    async def app(scope, receive, send):
+        seen["body"] = await _consume_body(receive)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    big_body = b"y" * (_REQUEST_LOG_MAX_BODY_BYTES * 3 + 17)
+    records = await _run_asgi(
+        RequestLoggingMiddleware,
+        app,
+        _make_http_scope(method="POST"),
+        body=big_body,
+    )
+
+    # The inner app saw every byte, untouched...
+    assert seen["body"] == big_body
+    # ...while the (2xx) log stays quiet about the body.
+    assert "request_body" not in records[0].extra_fields
+
+
+@pytest.mark.asyncio
+async def test_request_logging_forwards_chunked_body_intact():
+    """A multi-chunk streamed body reaches the app whole and in order."""
+    chunks = [b"alpha-", b"beta-", b"x" * (_REQUEST_LOG_MAX_BODY_BYTES + 5), b"-omega"]
+    remaining = list(chunks)
+
+    async def _receive():
+        if remaining:
+            chunk = remaining.pop(0)
+            return {"type": "http.request", "body": chunk, "more_body": bool(remaining)}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def _send(msg):
+        pass
+
+    seen: dict[str, bytes] = {}
+
+    async def app(scope, receive, send):
+        seen["body"] = await _consume_body(receive)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    mw = RequestLoggingMiddleware(app)
+    await mw(_make_http_scope(method="POST"), _receive, _send)
+
+    assert seen["body"] == b"".join(chunks)
 
 
 @pytest.mark.asyncio
