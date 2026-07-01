@@ -30,6 +30,26 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ---
 
+## [0.1.12] — 2026-07-01
+
+### Fixed
+
+- `RequestLoggingMiddleware` no longer truncates request bodies larger than
+  `_REQUEST_LOG_MAX_BODY_BYTES` (10 KiB) before they reach the application. It
+  had eagerly drained the whole body, kept only the first 10 KiB for the 5xx
+  log copy, then replayed *that truncated buffer* to the app — so every request
+  with a larger body was silently corrupted before the handler saw it: multipart
+  uploads lost their trailing bytes and closing boundary (Starlette then dropped
+  the file part, surfacing as a misleading `a multipart 'file' part is required`
+  400), and large JSON payloads were cut mid-document. The middleware now **tees**
+  the body — forwarding each ASGI message to the app untouched while copying only
+  a bounded prefix aside for logging — so the stream stays intact, true streaming
+  (storage/functions) is never buffered whole, and `http.disconnect` still
+  propagates for streaming-response hangup detection. The logged `request_body`
+  now reflects the bytes the app actually consumed. (#5)
+
+---
+
 ## [0.1.11] — 2026-06-13
 
 Project-initialization ergonomics. `supython init` now produces a project that
