@@ -1,32 +1,35 @@
-name: supython
+name: dev-app
 
 services:
   db:
-    build: ../docker/postgres
-    container_name: supython-db
+    # Build a Postgres image with `pg_cron` baked in (see docker/postgres/Dockerfile).
+    # `pg_cron` is required by migration 0001_extensions_and_roles.sql, so the
+    # stock `postgres:*-alpine` image is not sufficient. The first `supython up`
+    # builds this image once; later runs reuse the cached layer.
+    build: ./docker/postgres
+    container_name: dev-app-db
     environment:
-      POSTGRES_USER: supython
-      POSTGRES_PASSWORD: supython
-      POSTGRES_DB: supython
+      POSTGRES_USER: dev-app
+      POSTGRES_PASSWORD: dev-app
+      POSTGRES_DB: dev-app
     ports:
-      - "54322:5432"
+      - "54335:5432"
     volumes:
-      - supython-db-data:/var/lib/postgresql/data
+      - dev-app-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U supython -d supython"]
+      test: ["CMD-SHELL", "pg_isready -U dev-app -d dev-app"]
       interval: 2s
       timeout: 5s
       retries: 30
 
   postgrest:
     image: postgrest/postgrest:v12.2.3
-    container_name: supython-postgrest
+    container_name: dev-app-postgrest
     depends_on:
       db:
         condition: service_healthy
     environment:
-      # Connect as the `authenticator` role created by 0001_extensions_and_roles.sql.
-      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator}@db:5432/supython
+      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator}@db:5432/dev-app
       PGRST_DB_SCHEMAS: public
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: "@/etc/postgrest/jwks.json"
@@ -34,9 +37,9 @@ services:
       PGRST_OPENAPI_MODE: ignore-privileges
       PGRST_DB_USE_LEGACY_GUCS: "false"
     ports:
-      - "54321:3000"
+      - "54336:3000"
     volumes:
       - ./.supython/jwks.json:/etc/postgrest/jwks.json:ro
 
 volumes:
-  supython-db-data:
+  dev-app-db-data:

@@ -1,31 +1,31 @@
-name: supython
+name: dev-app
 
 services:
   db:
-    build: ../docker/postgres
-    container_name: supython-db
+    build: ./docker/postgres
+    container_name: dev-app-db
     environment:
-      POSTGRES_USER: supython
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supython}
-      POSTGRES_DB: supython
+      POSTGRES_USER: dev-app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-app}
+      POSTGRES_DB: dev-app
     ports:
       - "127.0.0.1:54322:5432"
     volumes:
-      - supython-db-data:/var/lib/postgresql/data
+      - dev-app-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U supython -d supython"]
+      test: ["CMD-SHELL", "pg_isready -U dev-app -d dev-app"]
       interval: 2s
       timeout: 5s
       retries: 30
 
   postgrest:
     image: postgrest/postgrest:v12.2.3
-    container_name: supython-postgrest
+    container_name: dev-app-postgrest
     depends_on:
       db:
         condition: service_healthy
     environment:
-      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator}@db:5432/supython
+      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator}@db:5432/dev-app
       PGRST_DB_SCHEMAS: public
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: "@/etc/postgrest/jwks.json"
@@ -36,8 +36,9 @@ services:
       - ./.supython/jwks.json:/etc/postgrest/jwks.json:ro
 
   supython:
-    build: ..
-    container_name: supython-api
+    # Pin to a release tag, or replace with `build: .` if you are building from source.
+    image: ghcr.io/<owner>/supython:<version>
+    container_name: dev-app-api
     depends_on:
       postgrest:
         condition: service_started
@@ -46,14 +47,14 @@ services:
     volumes:
       - ./.supython/jwt_private.pem:/run/secrets/jwt_private.pem:ro
       - ./.supython/jwks.json:/run/secrets/jwks.json:ro
-      - supython-storage:/var/lib/supython/storage
+      - dev-app-storage:/var/lib/supython/storage
     ports:
       - "${SUPYTHON_PUBLISH_PORT:-8000}:8000"
 
   worker:
-    build: ..
+    image: ghcr.io/<owner>/supython:<version>
     profiles: ["worker"]
-    container_name: supython-worker
+    container_name: dev-app-worker
     depends_on:
       - db
     env_file:
@@ -65,19 +66,19 @@ services:
   caddy:
     image: caddy:2-alpine
     profiles: ["tls"]
-    container_name: supython-caddy
+    container_name: dev-app-caddy
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      - dev-app-caddy-data:/data
+      - dev-app-caddy-config:/config
     depends_on:
       - supython
 
 volumes:
-  supython-db-data:
-  supython-storage:
-  caddy-data:
-  caddy-config:
+  dev-app-db-data:
+  dev-app-storage:
+  dev-app-caddy-data:
+  dev-app-caddy-config:

@@ -23,6 +23,7 @@ htmlcov/
 # dev-app/ is the dogfooded scaffolded project living inside the lib repo.
 # Its checked-in shape (compose files, functions, storage fixtures) mirrors
 # what `supython init` would produce; runtime state stays untracked.
+dev-app/
 dev-app/.env
 dev-app/.supython/
 dev-app/backups/

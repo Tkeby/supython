@@ -1,10 +1,13 @@
-"""Anon-readable greeter used by the TS SDK e2e suite."""
+"""Example edge function — served at /functions/hello (no restart needed).
 
-auth = "anon"
+Drop more ``.py`` files into ``functions/`` to add routes; each file's
+``handler`` is the entrypoint. See ``functions/README.md`` for the full ``ctx``
+reference.
+"""
+auth = "anon"  # "anon" (public) or "authenticated"
 methods = ["GET", "POST"]
 
 
 async def handler(req, ctx):
-    payload = await req.json() if req.method == "POST" else {}
-    name = payload.get("name") or (ctx.user.email if ctx.user else "world")
-    return {"msg": f"hello, {name}"}
+    who = ctx.user.email if ctx.user else "world"
+    return {"msg": f"hello, {who}"}
