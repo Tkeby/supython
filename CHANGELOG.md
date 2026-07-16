@@ -22,6 +22,17 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ### Breaking
 ### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+### Security
+
+---
+
+## [0.1.13] — 2026-07-16
+
+### Added
 - `POST /auth/v1/magiclink` accepts an optional `redirect_url`: when its origin
   is in the new `MAGIC_LINK_REDIRECT_ALLOWLIST` setting, `GET
   /auth/v1/magiclink/verify` 302-redirects the browser to it with the token
@@ -36,10 +47,6 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
   uses unchanged.
 - Migration `0016_magic_link_redirect.sql`: nullable `auth.one_time_tokens.redirect_url`.
 
-### Changed
-### Deprecated
-### Removed
-### Fixed
 ### Security
 - `redirect_url` is validated against an explicit origin allowlist before any
   email is sent (empty allowlist ⇒ every redirect is rejected, fail-closed);
