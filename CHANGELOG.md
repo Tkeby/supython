@@ -345,6 +345,7 @@ v0.1–v0.7 plus a v1.1.x admin track; see §19 decision log
 ---
 
 
+[0.1.13]: https://github.com/Tkeby/supython/releases/tag/v0.1.13
 [0.1.12]: https://github.com/Tkeby/supython/releases/tag/v0.1.12
 [0.1.11]: https://github.com/Tkeby/supython/releases/tag/v0.1.11
 [0.1.10]: https://github.com/Tkeby/supython/releases/tag/v0.1.10
