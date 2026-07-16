@@ -22,11 +22,31 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ### Breaking
 ### Added
+- `POST /auth/v1/magiclink` accepts an optional `redirect_url`: when its origin
+  is in the new `MAGIC_LINK_REDIRECT_ALLOWLIST` setting, `GET
+  /auth/v1/magiclink/verify` 302-redirects the browser to it with the token
+  pair in the fragment (the same shape as the OAuth callback), instead of
+  returning JSON. Omitting `redirect_url` keeps the existing JSON response.
+  Lets a consumer send a magic link straight to its own SPA route (e.g. an
+  invite-accept page) rather than the API's bare verify endpoint.
+- `POST /auth/v1/magiclink` accepts an optional `ttl` (seconds), clamped to
+  `[60, MAGIC_LINK_MAX_TTL]` (new setting, default 7 days). Lets a single
+  caller mint a longer-lived link (e.g. a multi-day operator invite) without
+  moving `MAGIC_LINK_TOKEN_TTL`, which every other magic-link request still
+  uses unchanged.
+- Migration `0016_magic_link_redirect.sql`: nullable `auth.one_time_tokens.redirect_url`.
+
 ### Changed
 ### Deprecated
 ### Removed
 ### Fixed
 ### Security
+- `redirect_url` is validated against an explicit origin allowlist before any
+  email is sent (empty allowlist ⇒ every redirect is rejected, fail-closed);
+  a non-allowlisted origin, embedded credentials (`user:pass@host`), or a
+  non-http(s) scheme all reject the request with `400 invalid_redirect`. The
+  target is stored server-side on the one-time token, not echoed through the
+  emailed link, so an intercepted link can't be repointed at a different origin.
 
 ---
 

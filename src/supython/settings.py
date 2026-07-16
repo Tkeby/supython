@@ -82,6 +82,19 @@ class Settings(BaseSettings):
     recover_token_ttl: int = 3600
     magic_link_token_ttl: int = 15 * 60
     otp_token_ttl: int = 10 * 60
+
+    # Ceiling for a per-request magic-link lifetime. A POST /auth/v1/magiclink
+    # may pass its own `ttl` (e.g. a multi-day operator invite) without moving
+    # the magic_link_token_ttl default that ordinary sign-in links use; the
+    # requested value is clamped to [60, magic_link_max_ttl].
+    magic_link_max_ttl: int = 60 * 60 * 24 * 7  # 7 days
+
+    # Comma-separated origins (scheme://host[:port]) a magic-link `redirect_url`
+    # may target. Empty ⇒ redirects are disabled and verify keeps returning
+    # JSON. A redirect_url whose origin is not listed is rejected 400 at request
+    # time, so an attacker can't aim a victim's emailed link at a token-stealing
+    # site. Example: MAGIC_LINK_REDIRECT_ALLOWLIST=https://app.example.com,http://localhost:5173
+    magic_link_redirect_allowlist: str = ""
     auth_rate_limit_enabled: bool = True
     auth_rate_limit_window_seconds: int = 60
     auth_rate_limit_token_per_window: int = 10

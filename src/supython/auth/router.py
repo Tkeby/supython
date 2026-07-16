@@ -2,8 +2,18 @@ from typing import Annotated
 from uuid import UUID
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from .. import db, tokens
 from ..settings import get_settings
@@ -198,24 +208,54 @@ async def verify_recover(payload: RecoverVerifyRequest, request: Request) -> Tok
 
 @router.post("/magiclink", status_code=202, dependencies=[Depends(_rl_magiclink)])
 async def request_magic_link(payload: MagicLinkRequest) -> None:
-    async with db.acquire() as conn:
-        await service.request_magic_link(conn, payload.email)
+    try:
+        async with db.acquire() as conn:
+            await service.request_magic_link(
+                conn,
+                payload.email,
+                redirect_url=payload.redirect_url,
+                ttl=payload.ttl,
+            )
+    except service.AuthError as exc:
+        # Currently only invalid_redirect (400) — a bad email is filtered by
+        # EmailStr at the schema layer before this handler ever runs.
+        raise _auth_error(exc) from exc
 
 
 @router.get(
     "/magiclink/verify",
-    response_model=TokenResponse,
     dependencies=[Depends(_rl_magiclink)],
 )
 async def verify_magic_link(
     token: Annotated[str, Query(description="Raw magic-link token from the email")],
-) -> TokenResponse:
+) -> Response:
+    """Verify a magic-link token.
+
+    Legacy/JSON callers (no ``redirect_url`` at request time) get the same
+    ``TokenResponse`` body as always. A caller that requested a redirect gets a
+    302 to that URL with the token pair in the fragment — the same shape as the
+    OAuth callback (`oauth_callback` below) — so a browser landing here from an
+    emailed link ends up on the SPA's own page with a session, not looking at
+    raw JSON.
+    """
     try:
         async with db.acquire() as conn:
-            result = await service.verify_magic_link(conn, token)
+            user, access, refresh, ttl, redirect_url = await service.verify_magic_link(
+                conn, token
+            )
     except service.AuthError as exc:
         raise _auth_error(exc) from exc
-    return _to_token_response(*result)
+    if redirect_url:
+        fragment = (
+            f"access_token={access}"
+            f"&refresh_token={refresh}"
+            f"&expires_in={ttl}"
+            f"&token_type=bearer"
+        )
+        return RedirectResponse(f"{redirect_url}#{fragment}", status_code=302)
+    return JSONResponse(
+        jsonable_encoder(_to_token_response(user, access, refresh, ttl))
+    )
 
 
 @router.post("/otp", status_code=202, dependencies=[Depends(_rl_otp)])
