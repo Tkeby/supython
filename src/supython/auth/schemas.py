@@ -17,6 +17,8 @@ MAX_PASSWORD_LEN = 128
 # chars in practice). 4096 keeps a generous head-room for any future
 # encoding while still rejecting "1 MB token" abuse.
 MAX_TOKEN_LEN = 4096
+# Redirect URLs are ordinary web URLs; 2048 is the de-facto browser cap.
+MAX_REDIRECT_URL_LEN = 2048
 
 EmailField = Annotated[EmailStr, Field(max_length=MAX_EMAIL_LEN)]
 PasswordField = Annotated[
@@ -68,6 +70,17 @@ class RecoverVerifyRequest(BaseModel):
 
 class MagicLinkRequest(BaseModel):
     email: EmailField
+    # Where /auth/v1/magiclink/verify should send the browser after issuing
+    # tokens: a 302 to this URL with the token pair in the fragment (as OAuth
+    # does), instead of a JSON response. Must match MAGIC_LINK_REDIRECT_
+    # ALLOWLIST or the request is rejected 400. Omit for the JSON flow.
+    redirect_url: Annotated[
+        str | None, Field(default=None, max_length=MAX_REDIRECT_URL_LEN)
+    ] = None
+    # Per-request token lifetime in seconds, clamped to [60, MAGIC_LINK_MAX_TTL].
+    # Omit to use MAGIC_LINK_TOKEN_TTL. Lets a caller mint a longer-lived link
+    # (e.g. an operator invite) without changing the global default.
+    ttl: Annotated[int | None, Field(default=None, ge=1)] = None
 
 
 class OtpRequest(BaseModel):

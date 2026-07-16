@@ -6,6 +6,7 @@ import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import asyncpg
@@ -82,19 +83,26 @@ async def _store_one_time_token(
     user_id: UUID,
     token_type: str,
     ttl_seconds: int,
+    *,
+    redirect_url: str | None = None,
 ) -> str:
-    """Generate, sha256-hash, and store a one-time token. Returns the raw token."""
+    """Generate, sha256-hash, and store a one-time token. Returns the raw token.
+
+    ``redirect_url`` is stored only for magic-link tokens (recover/otp pass
+    None ⇒ NULL); verify reads it back to decide between a 302 and JSON.
+    """
     raw = secrets.token_urlsafe(32)
     expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
     await conn.execute(
         """
-        insert into auth.one_time_tokens (user_id, type, token_hash, expires_at)
-        values ($1, $2, $3, $4)
+        insert into auth.one_time_tokens (user_id, type, token_hash, expires_at, redirect_url)
+        values ($1, $2, $3, $4, $5)
         """,
         user_id,
         token_type,
         _sha256(raw),
         expires_at,
+        redirect_url,
     )
     return raw
 
@@ -110,7 +118,7 @@ async def _verify_one_time_token(
     if email is not None:
         row = await conn.fetchrow(
             """
-            select ott.id as ott_id, u.id, u.email, u.created_at
+            select ott.id as ott_id, ott.redirect_url, u.id, u.email, u.created_at
             from auth.one_time_tokens ott
             join auth.users u on u.id = ott.user_id
             where ott.token_hash = $1
@@ -126,7 +134,7 @@ async def _verify_one_time_token(
     else:
         row = await conn.fetchrow(
             """
-            select ott.id as ott_id, u.id, u.email, u.created_at
+            select ott.id as ott_id, ott.redirect_url, u.id, u.email, u.created_at
             from auth.one_time_tokens ott
             join auth.users u on u.id = ott.user_id
             where ott.token_hash = $1
@@ -354,17 +362,85 @@ async def verify_recover(
     return user, access, refresh, ttl
 
 
+def _url_origin(url: str) -> str | None:
+    """Return the ``scheme://host[:port]`` origin of an absolute http(s) URL.
+
+    Returns None for anything that isn't a well-formed absolute http(s) URL, or
+    that carries embedded credentials (``user:pass@host``) — those have no place
+    in a redirect target and are a classic obfuscation vector. Origins are
+    lower-cased so comparison is case-insensitive on scheme/host.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.netloc or "@" in parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+def validate_magic_link_redirect(redirect_url: str, allowlist_csv: str) -> str:
+    """Return ``redirect_url`` when its origin is allowlisted, else raise.
+
+    ``allowlist_csv`` is the comma-separated ``MAGIC_LINK_REDIRECT_ALLOWLIST``
+    setting. An empty allowlist rejects every redirect (the feature is off and
+    fails closed). Matching is by origin only, so any path/query/fragment under
+    an allowlisted origin is accepted. Raises ``AuthError('invalid_redirect')``
+    (400) on any miss — the caller turns that into an HTTP 400.
+    """
+    origin = _url_origin(redirect_url)
+    if origin is None:
+        raise AuthError(
+            "invalid_redirect", "redirect_url must be an absolute http(s) URL", 400
+        )
+    allowed = {
+        o for entry in allowlist_csv.split(",") if (o := _url_origin(entry.strip()))
+    }
+    if origin not in allowed:
+        raise AuthError(
+            "invalid_redirect", "redirect_url origin is not allowlisted", 400
+        )
+    return redirect_url
+
+
+def _clamp_magic_link_ttl(ttl: int | None, settings: Any) -> int:
+    """Resolve the effective magic-link TTL in seconds.
+
+    ``None`` ⇒ the ``magic_link_token_ttl`` default. A supplied value is clamped
+    to ``[60, magic_link_max_ttl]`` so a caller can neither mint a link that
+    expires too fast to click nor one that outlives the configured ceiling.
+    """
+    if ttl is None:
+        return settings.magic_link_token_ttl
+    return max(60, min(ttl, settings.magic_link_max_ttl))
+
+
 async def request_magic_link(
-    conn: asyncpg.Connection, email: str
+    conn: asyncpg.Connection,
+    email: str,
+    *,
+    redirect_url: str | None = None,
+    ttl: int | None = None,
 ) -> None:
+    s = get_settings()
+    # Validate the redirect before the user lookup: a bad redirect is a client
+    # error regardless of whether the email exists, and checking it here keeps
+    # the email-enumeration silence below intact (unknown emails still 202).
+    if redirect_url is not None:
+        validate_magic_link_redirect(redirect_url, s.magic_link_redirect_allowlist)
     row = await conn.fetchrow(
         "select id from auth.users where email = $1", email
     )
     if not row:
         return
-    s = get_settings()
     async with conn.transaction():
-        raw = await _store_one_time_token(conn, row["id"], "magic_link", s.magic_link_token_ttl)
+        raw = await _store_one_time_token(
+            conn,
+            row["id"],
+            "magic_link",
+            _clamp_magic_link_ttl(ttl, s),
+            redirect_url=redirect_url,
+        )
         verify_url = f"{s.site_url}/auth/v1/magiclink/verify?token={raw}"
         await mail.dispatch(
             conn,
@@ -379,7 +455,7 @@ async def request_magic_link(
 
 async def verify_magic_link(
     conn: asyncpg.Connection, token: str
-) -> tuple[UserResponse, str, str, int]:
+) -> tuple[UserResponse, str, str, int, str | None]:
     row = await _verify_one_time_token(conn, token, "magic_link")
     user = _row_to_user(row)
     async with conn.transaction():
@@ -388,7 +464,9 @@ async def verify_magic_link(
             row["ott_id"],
         )
         access, refresh, ttl = await _issue_pair(conn, user)
-    return user, access, refresh, ttl
+    # redirect_url is None for legacy/JSON callers; the router 302-redirects
+    # (OAuth-style, tokens in the fragment) only when it is set.
+    return user, access, refresh, ttl, row["redirect_url"]
 
 
 async def request_otp(

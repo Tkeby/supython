@@ -45,3 +45,19 @@ def test_auth_rate_limit_defaults() -> None:
     assert s.auth_rate_limit_recover_per_window == 3
     assert s.auth_rate_limit_otp_per_window == 5
     assert s.auth_rate_limit_magiclink_per_window == 5
+
+
+def test_magic_link_redirect_defaults() -> None:
+    s = Settings(_env_file=None)
+    assert s.magic_link_max_ttl == 60 * 60 * 24 * 7
+    # Empty by default ⇒ redirects are off until an operator opts in.
+    assert s.magic_link_redirect_allowlist == ""
+
+
+def test_magic_link_redirect_allowlist_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MAGIC_LINK_REDIRECT_ALLOWLIST",
+        "https://app.example.com,http://localhost:5173",
+    )
+    s = Settings(_env_file=None)
+    assert s.magic_link_redirect_allowlist == "https://app.example.com,http://localhost:5173"
