@@ -27,6 +27,13 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 ### Removed
 ### Fixed
 ### Security
+- Enforce account eligibility at session issuance (GHSA-27m9-35j7-7g5f). Every
+  grant type — password, refresh, magic-link, OTP, recover, OAuth — now checks
+  `auth.users.banned_until` before minting a token pair; a banned account gets
+  `403 account_disabled` instead of a fresh session. The check sits at the
+  `_issue_pair` funnel and in `refresh_grant` (which mints its own pair), so an
+  in-flight session also dies at its next refresh. The `request_*` endpoints
+  stay enumeration-resistant (still `202` for a banned email).
 
 ---
 

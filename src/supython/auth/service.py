@@ -62,9 +62,34 @@ async def _audit_log(
     )
 
 
+async def _assert_can_authenticate(
+    conn: asyncpg.Connection, user_id: UUID
+) -> None:
+    """Refuse session issuance for an account that is not eligible to sign in.
+
+    Enforced at the issuance funnel so every grant type — password, refresh,
+    magic-link, OTP, recover, OAuth — is gated by the same rule. A currently
+    banned account (``banned_until`` in the future) raises ``account_disabled``
+    (403), deliberately distinct from ``invalid_credentials`` (401) so a caller
+    can tell "wrong password" apart from "correct credentials, but locked out".
+
+    Gating at issuance (rather than only at password verification) means a ban
+    also lands on the passwordless verifies and on ``refresh_grant``, so an
+    in-flight session dies at its next refresh — near-immediate revocation with
+    no token blocklist.
+    """
+    banned_until = await conn.fetchval(
+        "select banned_until from auth.users where id = $1",
+        user_id,
+    )
+    if banned_until is not None and banned_until > datetime.now(UTC):
+        raise AuthError("account_disabled", "Account is disabled", 403)
+
+
 async def _issue_pair(
     conn: asyncpg.Connection, user: UserResponse
 ) -> tuple[str, str, int]:
+    await _assert_can_authenticate(conn, user.id)
     extra = await claims.collect(user, conn)
     access, ttl = tokens.issue_access_token(
         user.id, user.email, extra_claims=extra or None
@@ -205,12 +230,14 @@ async def password_grant(
         logger.warning("auth.password_grant: bad password for %s", email)
         raise AuthError("invalid_credentials", "Invalid email or password", 401)
 
+    user = _row_to_user(row)
+    # Issue first: _issue_pair raises account_disabled (403) for a banned user,
+    # so we don't stamp last_sign_in_at for a sign-in that was refused.
+    access, refresh, ttl = await _issue_pair(conn, user)
     await conn.execute(
         "update auth.users set last_sign_in_at = now() where id = $1",
         row["id"],
     )
-    user = _row_to_user(row)
-    access, refresh, ttl = await _issue_pair(conn, user)
     return user, access, refresh, ttl
 
 
@@ -272,6 +299,10 @@ async def refresh_grant(
         )
 
     user = _row_to_user(row)
+    # refresh_grant mints its own pair rather than routing through _issue_pair,
+    # so the eligibility gate has to be applied here too. Check before rotating:
+    # a banned user is refused without burning their current refresh token.
+    await _assert_can_authenticate(conn, user.id)
     new_refresh = tokens.issue_refresh_token()
     async with conn.transaction():
         await conn.execute(
