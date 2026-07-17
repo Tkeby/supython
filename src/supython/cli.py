@@ -1487,7 +1487,7 @@ def _bootstrap_test_db(timeout: int) -> None:
     The named volume in `docker-compose.test.yml` makes the second call
     cheap — schema survives between pytest sessions.
     """
-    _compose_with(_TEST_COMPOSE_FILE, "up", "-d", "--wait", "db")
+    _compose_with(_TEST_COMPOSE_FILE, "up", "-d", "--wait", "db", project_directory=".")
 
     prev = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
@@ -1531,7 +1531,7 @@ def test_up(
 @test_cli.command("down")
 def test_down() -> None:
     """Stop the test DB container. Keeps the volume (and migrations)."""
-    _compose_with(_TEST_COMPOSE_FILE, "down")
+    _compose_with(_TEST_COMPOSE_FILE, "down", project_directory=".")
 
 
 @test_cli.command("reset")
@@ -1540,7 +1540,7 @@ def test_reset() -> None:
     confirm = typer.confirm("This will delete the test DB volume. Continue?")
     if not confirm:
         raise typer.Abort()
-    _compose_with(_TEST_COMPOSE_FILE, "down", "-v")
+    _compose_with(_TEST_COMPOSE_FILE, "down", "-v", project_directory=".")
 
 
 @test_cli.command(
@@ -1667,7 +1667,7 @@ def _ensure_jwks_for_postgrest(s: Settings) -> None:
     typer.echo(f"  JWT_JWKS_PATH={s.jwt_jwks_path}")
 
 
-_TEST_COMPOSE_FILE = "docker-compose.test.yml"
+_TEST_COMPOSE_FILE = "tests/docker-compose.test.yml"
 _TEST_DATABASE_URL = "postgresql://supython:supython@localhost:54323/supython"
 
 
@@ -1676,12 +1676,17 @@ def _compose(*args: str) -> None:
 
 
 def _compose_with(
-    file: str | None, *args: str, profiles: tuple[str, ...] = ()
+    file: str | None,
+    *args: str,
+    profiles: tuple[str, ...] = (),
+    project_directory: str | None = None,
 ) -> None:
     """Run `docker compose [-f <file>] [--profile <p>]... <args...>`, surfacing common errors."""
     cmd = ["docker", "compose"]
     if file:
         cmd += ["-f", file]
+    if project_directory:
+        cmd += ["--project-directory", project_directory]
     for p in profiles:
         cmd += ["--profile", p]
     cmd += list(args)
