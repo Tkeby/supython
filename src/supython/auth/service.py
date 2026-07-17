@@ -68,22 +68,34 @@ async def _assert_can_authenticate(
     """Refuse session issuance for an account that is not eligible to sign in.
 
     Enforced at the issuance funnel so every grant type — password, refresh,
-    magic-link, OTP, recover, OAuth — is gated by the same rule. A currently
-    banned account (``banned_until`` in the future) raises ``account_disabled``
-    (403), deliberately distinct from ``invalid_credentials`` (401) so a caller
-    can tell "wrong password" apart from "correct credentials, but locked out".
+    magic-link, OTP, recover, OAuth — is gated by the same rules:
 
-    Gating at issuance (rather than only at password verification) means a ban
-    also lands on the passwordless verifies and on ``refresh_grant``, so an
-    in-flight session dies at its next refresh — near-immediate revocation with
-    no token blocklist.
+    - ``banned_until`` in the future ⇒ ``account_disabled`` (403), deliberately
+      distinct from ``invalid_credentials`` (401) so a caller can tell "wrong
+      password" apart from "correct credentials, but locked out".
+    - ``activated_at is null`` ⇒ ``account_inactive`` (403). A consumer can
+      pre-create an ``auth.users`` row (e.g. an invite flow that provisions the
+      user plus a role/membership up front) that must not authenticate until an
+      explicit ``activate_user`` call; signup and OAuth sign-in activate inline.
+
+    Gating at issuance (rather than only at password verification) means the
+    check also lands on the passwordless verifies and on ``refresh_grant``, so
+    an in-flight session dies at its next refresh — near-immediate revocation
+    with no token blocklist.
     """
-    banned_until = await conn.fetchval(
-        "select banned_until from auth.users where id = $1",
+    row = await conn.fetchrow(
+        "select banned_until, activated_at from auth.users where id = $1",
         user_id,
     )
+    if row is None:
+        # The row vanished between the caller's lookup and issuance (e.g. a
+        # concurrent delete). Fail closed rather than mint an orphan session.
+        raise AuthError("account_disabled", "Account is not eligible to sign in", 403)
+    banned_until = row["banned_until"]
     if banned_until is not None and banned_until > datetime.now(UTC):
         raise AuthError("account_disabled", "Account is disabled", 403)
+    if row["activated_at"] is None:
+        raise AuthError("account_inactive", "Account is not activated", 403)
 
 
 async def _issue_pair(
@@ -188,8 +200,8 @@ async def signup(
     pw_hash = passwords.hash_password(password)
     row = await conn.fetchrow(
         """
-        insert into auth.users (email, encrypted_password, email_confirmed_at)
-        values ($1, $2, now())
+        insert into auth.users (email, encrypted_password, email_confirmed_at, activated_at)
+        values ($1, $2, now(), now())
         returning id, email, created_at
         """,
         email,
@@ -338,6 +350,36 @@ async def get_user(
         user_id,
     )
     return _row_to_user(row) if row else None
+
+
+async def activate_user(conn: asyncpg.Connection, user_id: UUID) -> None:
+    """Mark a pre-created account eligible to authenticate.
+
+    A consumer that provisions an ``auth.users`` row up front (e.g. an invite
+    flow that creates the user plus a role/membership before the person has set
+    up credentials) calls this at its intended activation step. Until then the
+    row's ``activated_at`` is null and every session-issuing path refuses it with
+    ``account_inactive`` (403). Self-serve signup and OAuth sign-in activate
+    inline, so this is only needed for externally pre-created rows.
+
+    Idempotent: activating an already-active user is a no-op and does not move
+    the existing ``activated_at``. Raises ``AuthError('user_not_found', 404)``
+    when no such user exists, so a mistyped id surfaces instead of silently
+    doing nothing.
+    """
+    exists = await conn.fetchval(
+        "select 1 from auth.users where id = $1", user_id
+    )
+    if not exists:
+        raise AuthError("user_not_found", "User not found", 404)
+    await conn.execute(
+        """
+        update auth.users
+        set activated_at = now()
+        where id = $1 and activated_at is null
+        """,
+        user_id,
+    )
 
 
 async def request_recover(
@@ -699,5 +741,13 @@ async def oauth_finish(
                     },
                 )
 
+    # A successful OAuth exchange proves control of the external account, so it
+    # activates the user inline (no-op if already active). This also lets a
+    # consumer's pre-created invite row, matched here by email, come online via
+    # its first OAuth sign-in.
+    await conn.execute(
+        "update auth.users set activated_at = now() where id = $1 and activated_at is null",
+        user.id,
+    )
     access, refresh, ttl = await _issue_pair(conn, user)
     return user, access, refresh, ttl, redirect_uri

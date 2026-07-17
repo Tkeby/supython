@@ -22,6 +22,14 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ### Breaking
 ### Added
+- Account activation gate for pre-created users (GHSA-27m9-35j7-7g5f B). New
+  `auth.users.activated_at` column (migration `0017`) plus
+  `supython.auth.service.activate_user(conn, user_id)`: a consumer that
+  pre-creates an `auth.users` row (e.g. an invite flow that provisions the user
+  plus a role/membership up front) can keep it from authenticating through the
+  passwordless endpoints until an explicit activation step. Self-serve signup
+  and OAuth sign-in activate inline; existing rows are backfilled to
+  `created_at` so live users are unaffected.
 ### Changed
 ### Deprecated
 ### Removed
@@ -29,11 +37,12 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 ### Security
 - Enforce account eligibility at session issuance (GHSA-27m9-35j7-7g5f). Every
   grant type — password, refresh, magic-link, OTP, recover, OAuth — now checks
-  `auth.users.banned_until` before minting a token pair; a banned account gets
-  `403 account_disabled` instead of a fresh session. The check sits at the
-  `_issue_pair` funnel and in `refresh_grant` (which mints its own pair), so an
-  in-flight session also dies at its next refresh. The `request_*` endpoints
-  stay enumeration-resistant (still `202` for a banned email).
+  account eligibility before minting a token pair, at the `_issue_pair` funnel
+  and in `refresh_grant` (which mints its own pair), so an in-flight session
+  also dies at its next refresh. A banned account (`banned_until` in the future)
+  gets `403 account_disabled`; a not-yet-activated account (`activated_at is
+  null`) gets `403 account_inactive`. The `request_*` endpoints stay
+  enumeration-resistant (still `202` for a banned or inactive email).
 
 ---
 
