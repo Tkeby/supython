@@ -22,6 +22,17 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ### Breaking
 ### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+### Security
+
+---
+
+## [0.1.14] — 2026-07-17
+
+### Added
 - Account activation gate for pre-created users (GHSA-27m9-35j7-7g5f B). New
   `auth.users.activated_at` column (migration `0017`) plus
   `supython.auth.service.activate_user(conn, user_id)`: a consumer that
@@ -30,10 +41,7 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
   passwordless endpoints until an explicit activation step. Self-serve signup
   and OAuth sign-in activate inline; existing rows are backfilled to
   `created_at` so live users are unaffected.
-### Changed
-### Deprecated
-### Removed
-### Fixed
+
 ### Security
 - Enforce account eligibility at session issuance (GHSA-27m9-35j7-7g5f). Every
   grant type — password, refresh, magic-link, OTP, recover, OAuth — now checks
