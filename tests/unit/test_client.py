@@ -142,8 +142,8 @@ class TestAuthClient:
         assert client._access_token is None
 
     async def test_verify_signup_sets_session(self, client, auth):
-        with patch.object(auth._http, "get", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = _json_resp(TOKEN_BODY, 200)
+        with patch.object(auth._http, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = _json_resp(TOKEN_BODY, 200)
             result = await auth.verify_signup("tok123")
         assert result.error is None
         assert result.data is not None

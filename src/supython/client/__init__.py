@@ -10,6 +10,7 @@ from ._auth import (
     SupythonResponse,
     TokenResponse,
     UserResponse,
+    UserUpdateResult,
 )
 from ._client import Client
 from ._config import (
@@ -51,6 +52,7 @@ __all__ = [
     "SupythonResponse",
     "TokenResponse",
     "UserResponse",
+    "UserUpdateResult",
     "SIGNED_IN",
     "SIGNED_OUT",
     "TOKEN_REFRESHED",

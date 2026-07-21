@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     magic_link_token_ttl: int = 15 * 60
     otp_token_ttl: int = 10 * 60
     signup_confirm_token_ttl: int = 60 * 60 * 24
+    email_change_token_ttl: int = 3600
 
     # When true, password signup returns 202 (no tokens) and sends a
     # confirmation email; sign-in is refused with `email_not_confirmed` (403)
@@ -110,6 +111,14 @@ class Settings(BaseSettings):
     auth_rate_limit_otp_per_window: int = 5
     auth_rate_limit_magiclink_per_window: int = 5
     auth_rate_limit_confirm_per_window: int = 5
+
+    # Comma-separated IPs/CIDRs of reverse proxies in front of supython
+    # (e.g. "10.0.0.0/8,127.0.0.1"). When the TCP peer is trusted, the client
+    # IP for rate limiting and audit logging is taken from X-Forwarded-For
+    # (rightmost address not in this list). Empty ⇒ headers are ignored and
+    # the TCP peer address is used, so a spoofed header can never influence
+    # rate-limit buckets.
+    trusted_proxies: str = ""
 
     authenticator_password: str = "authenticator"
 

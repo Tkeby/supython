@@ -1,8 +1,9 @@
+import json
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # Per-field input caps. The body-size middleware already rejects absurdly
 # large payloads, but per-field caps give the user a precise 422 instead
@@ -19,6 +20,9 @@ MAX_PASSWORD_LEN = 128
 MAX_TOKEN_LEN = 4096
 # Redirect URLs are ordinary web URLs; 2048 is the de-facto browser cap.
 MAX_REDIRECT_URL_LEN = 2048
+# Serialized cap for user_metadata payloads: enough for profile-shaped data,
+# small enough that a hostile client can't grow auth.users rows unboundedly.
+MAX_USER_METADATA_BYTES = 8192
 
 EmailField = Annotated[EmailStr, Field(max_length=MAX_EMAIL_LEN)]
 PasswordField = Annotated[
@@ -27,15 +31,34 @@ PasswordField = Annotated[
 TokenField = Annotated[str, Field(min_length=1, max_length=MAX_TOKEN_LEN)]
 
 
+def _validate_metadata_size(v: dict[str, Any] | None) -> dict[str, Any] | None:
+    if v is not None and len(json.dumps(v)) > MAX_USER_METADATA_BYTES:
+        raise ValueError(
+            f"metadata must serialize to at most {MAX_USER_METADATA_BYTES} bytes"
+        )
+    return v
+
+
 class UserResponse(BaseModel):
     id: UUID
     email: EmailStr
     created_at: datetime
+    # User-controlled (writable via PUT /auth/v1/user `data`); display-only —
+    # never a basis for authorization. app_metadata is server-controlled.
+    user_metadata: dict[str, Any] = Field(default_factory=dict)
+    app_metadata: dict[str, Any] = Field(default_factory=dict)
+    # Pending email-change target, until both inboxes confirm.
+    new_email: EmailStr | None = None
 
 
 class SignUpRequest(BaseModel):
     email: EmailField
     password: PasswordField
+    # Free-form profile data stored in raw_user_meta_data. User-controlled:
+    # keep it out of RLS policies and authorization decisions.
+    data: dict[str, Any] | None = None
+
+    _cap_data = field_validator("data")(_validate_metadata_size)
     # Only meaningful when AUTH_REQUIRE_EMAIL_CONFIRMATION is on: where
     # /auth/v1/confirm/verify should 302 the browser after confirming, tokens
     # in the fragment (same contract as the magic-link redirect_url, validated
@@ -76,12 +99,33 @@ class LogoutRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
-    password: PasswordField
+    """PUT /auth/v1/user body. Exactly one mode per request:
+
+    - ``password`` (+ ``current_password``) — credential change, exclusive.
+    - ``email`` and/or ``data`` — starts a dual-confirmation email change
+      and/or merges into user_metadata.
+    """
+
+    password: Annotated[
+        str | None,
+        Field(default=None, min_length=MIN_PASSWORD_LEN, max_length=MAX_PASSWORD_LEN),
+    ] = None
     # Required when the account already has a password; a bearer token alone
     # must not be enough to take over the credential.
     current_password: Annotated[
         str | None, Field(default=None, max_length=MAX_PASSWORD_LEN)
     ] = None
+    email: Annotated[EmailStr | None, Field(default=None, max_length=MAX_EMAIL_LEN)] = None
+    data: dict[str, Any] | None = None
+
+    _cap_data = field_validator("data")(_validate_metadata_size)
+
+
+class UserUpdateResponse(BaseModel):
+    """200 body for non-password PUT /auth/v1/user updates."""
+
+    user: UserResponse
+    email_change_sent_at: datetime | None = None
 
 
 class TokenResponse(BaseModel):
