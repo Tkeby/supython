@@ -473,6 +473,9 @@ need any claim beyond the user UUID.
 | `AUTH_RATE_LIMIT_MAGICLINK_PER_WINDOW` | `5` | `/auth/v1/magiclink` attempts per IP/window |
 | `AUTH_RATE_LIMIT_CONFIRM_PER_WINDOW` | `5` | `/auth/v1/confirm/*` attempts per IP/window |
 | `AUTH_REQUIRE_EMAIL_CONFIRMATION` | `false` | Require new signups to confirm their email (signup returns 202 without tokens; sign-in refused with `email_not_confirmed` until `/auth/v1/confirm/verify`) |
+| `OAUTH_REDIRECT_ALLOWLIST` | *(empty)* | Comma-separated origins an OAuth `redirect_uri` may target. Empty fails closed — OAuth sign-in is refused until configured |
+| `TRUSTED_PROXIES` | *(empty)* | Comma-separated IPs/CIDRs of reverse proxies. When the TCP peer is trusted, rate limiting and audit logs use the rightmost untrusted `X-Forwarded-For` hop; empty ignores the header entirely |
+| `EMAIL_CHANGE_TOKEN_TTL` | `3600` | Email-change confirmation token lifetime in seconds (both inboxes must confirm) |
 | `SIGNUP_CONFIRM_TOKEN_TTL` | `86400` | Signup confirmation token lifetime in seconds (24 h) |
 
 **`AUTHENTICATOR_PASSWORD`** — the password used for the `authenticator` Postgres

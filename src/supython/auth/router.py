@@ -13,14 +13,17 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, RedirectResponse
+from urllib.parse import quote
 
-from .. import db, tokens
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+from .. import db, netutil, tokens
 from ..settings import get_settings
 from . import ratelimit, service
 from .schemas import (
     ConfirmResendRequest,
+    LogoutRequest,
     MagicLinkRequest,
     OtpRequest,
     OtpVerifyRequest,
@@ -32,6 +35,8 @@ from .schemas import (
     TokenRequest,
     TokenResponse,
     UserResponse,
+    UserUpdateRequest,
+    UserUpdateResponse,
 )
 
 router = APIRouter(prefix="/auth/v1", tags=["auth"])
@@ -76,20 +81,53 @@ async def _current_user_id(
 
 
 def _client_ip(request: Request) -> str:
-    if request.client is None:
-        return "unknown"
-    return request.client.host
+    return _client_ip_or_none(request) or "unknown"
 
 
 def _client_ip_or_none(request: Request) -> str | None:
-    """Return the client IP for audit logging, or None when unavailable.
+    """Return the client IP for rate limiting / audit logging, or None.
 
-    Unlike _client_ip, returns None instead of "unknown" so callers can safely
-    pass the result to a Postgres inet column without a cast error.
+    Proxy-aware: when the TCP peer is listed in TRUSTED_PROXIES, the address
+    is taken from X-Forwarded-For (rightmost untrusted hop — see
+    supython.netutil.resolve_client_ip). Returns None (not "unknown") so
+    callers can pass the result straight to a Postgres inet column.
     """
-    if request.client is None:
-        return None
-    return request.client.host
+    peer = request.client.host if request.client else None
+    return netutil.resolve_client_ip(
+        peer,
+        request.headers.get("x-forwarded-for"),
+        get_settings().trusted_proxies,
+    )
+
+
+def _token_page(action_path: str, token: str, heading: str, button: str) -> HTMLResponse:
+    """Interstitial for emailed verify links.
+
+    The emailed GET must stay side-effect-free — mail scanners prefetch GETs
+    and would burn the token (or, in redirect mode, receive the session).
+    Consumption happens on the form POST below, which scanners don't submit.
+    The token rides in the form action's query string so no body parsing
+    (python-multipart) is needed.
+    """
+    action = f"{action_path}?token={quote(token, safe='')}"
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>{heading}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{{font-family:system-ui,sans-serif;display:flex;justify-content:center;padding-top:15vh;margin:0}}
+form{{text-align:center}}button{{font-size:1rem;padding:.6rem 1.4rem;cursor:pointer}}</style>
+</head><body><form method="post" action="{action}">
+<h1>{heading}</h1><button type="submit">{button}</button>
+</form></body></html>"""
+    return HTMLResponse(html)
+
+
+def _invalid_link_page() -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;"
+        "text-align:center;padding-top:15vh\"><h1>Link invalid or expired</h1>"
+        "<p>Request a new one and try again.</p></body></html>",
+        status_code=400,
+    )
 
 
 def _rate_limit_dep(prefix: str, rule_attr: str):
@@ -145,6 +183,7 @@ async def signup(payload: SignUpRequest) -> Response:
                 conn,
                 payload.email,
                 payload.password,
+                data=payload.data,
                 redirect_url=payload.redirect_url,
             )
     except service.AuthError as exc:
@@ -187,9 +226,108 @@ async def refresh(payload: RefreshRequest, request: Request) -> TokenResponse:
 
 
 @router.post("/logout", status_code=204)
-async def logout(payload: RefreshRequest) -> None:
-    async with db.acquire() as conn:
-        await service.logout(conn, payload.refresh_token)
+async def logout(
+    request: Request,
+    payload: LogoutRequest | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
+    """Sign out. ``scope``: local (default) / global / others.
+
+    The bearer token, when present and valid, identifies the user for
+    ``scope=global`` without needing a refresh token. An invalid bearer is
+    ignored rather than rejected — revocation is a safe operation and the
+    refresh token in the body is an independent credential.
+    """
+    user_id: UUID | None = None
+    if authorization and authorization.lower().startswith("bearer "):
+        try:
+            claims = tokens.decode_access_token(authorization.split(" ", 1)[1])
+            user_id = UUID(claims["sub"])
+        except (jwt.PyJWTError, KeyError, ValueError):
+            user_id = None
+    body = payload or LogoutRequest()
+    try:
+        async with db.acquire() as conn:
+            await service.logout(
+                conn,
+                body.refresh_token,
+                scope=body.scope,
+                user_id=user_id,
+                ip=_client_ip_or_none(request),
+                ua=request.headers.get("user-agent"),
+            )
+    except service.AuthError as exc:
+        raise _auth_error(exc) from exc
+
+
+@router.put(
+    "/user",
+    response_model=TokenResponse,
+    dependencies=[Depends(_rl_token)],
+    responses={
+        200: {
+            "description": "TokenResponse for a password change; "
+            "UserUpdateResponse for email/data updates.",
+        }
+    },
+)
+async def update_user(
+    payload: UserUpdateRequest,
+    user_id: Annotated[UUID, Depends(_current_user_id)],
+    request: Request,
+) -> Response:
+    """Update the caller's account. One mode per request:
+
+    - ``password`` (+ ``current_password`` when one is set): revokes every
+      refresh token, returns a fresh ``TokenResponse``. Exclusive.
+    - ``email``: starts a dual-confirmation email change (both inboxes get a
+      link); ``data``: shallow-merges into user_metadata. These two may be
+      combined and return a ``UserUpdateResponse``.
+    """
+    ip = _client_ip_or_none(request)
+    ua = request.headers.get("user-agent")
+    invalid = _auth_error(
+        service.AuthError(
+            "invalid_request",
+            "Provide password (exclusively), or email and/or data",
+            400,
+        )
+    )
+    try:
+        async with db.acquire() as conn:
+            if payload.password is not None:
+                if payload.email is not None or payload.data is not None:
+                    raise invalid
+                result = await service.update_password(
+                    conn,
+                    user_id,
+                    payload.password,
+                    payload.current_password,
+                    ip=ip,
+                    ua=ua,
+                )
+                return JSONResponse(jsonable_encoder(_to_token_response(*result)))
+
+            if payload.email is None and payload.data is None:
+                raise invalid
+            email_change_sent_at = None
+            if payload.data is not None:
+                await service.update_user_metadata(conn, user_id, payload.data)
+            if payload.email is not None:
+                await service.request_email_change(
+                    conn, user_id, payload.email, ip=ip, ua=ua
+                )
+                email_change_sent_at = datetime.now(UTC)
+            user = await service.get_user(conn, user_id)
+    except service.AuthError as exc:
+        raise _auth_error(exc) from exc
+    if user is None:
+        raise HTTPException(404, "User not found")
+    return JSONResponse(
+        jsonable_encoder(
+            UserUpdateResponse(user=user, email_change_sent_at=email_change_sent_at)
+        )
+    )
 
 
 @router.get("/user", response_model=UserResponse)
@@ -249,18 +387,39 @@ async def request_magic_link(payload: MagicLinkRequest) -> None:
 @router.get(
     "/magiclink/verify",
     dependencies=[Depends(_rl_magiclink)],
+    response_class=HTMLResponse,
+)
+async def magic_link_page(
+    token: Annotated[str, Query(description="Raw magic-link token from the email")],
+) -> Response:
+    """Side-effect-free landing page for the emailed link.
+
+    Renders a confirm button whose POST consumes the token; a scanner
+    prefetching this GET burns nothing. Invalid/expired tokens get a 400
+    page without revealing anything else.
+    """
+    async with db.acquire() as conn:
+        alive = await service.peek_one_time_token(conn, token, ["magic_link"])
+    if not alive:
+        return _invalid_link_page()
+    return _token_page(
+        "/auth/v1/magiclink/verify", token, "Sign in", "Continue"
+    )
+
+
+@router.post(
+    "/magiclink/verify",
+    dependencies=[Depends(_rl_magiclink)],
 )
 async def verify_magic_link(
     token: Annotated[str, Query(description="Raw magic-link token from the email")],
 ) -> Response:
-    """Verify a magic-link token.
+    """Consume a magic-link token (token in the query string, no body).
 
-    Legacy/JSON callers (no ``redirect_url`` at request time) get the same
-    ``TokenResponse`` body as always. A caller that requested a redirect gets a
-    302 to that URL with the token pair in the fragment — the same shape as the
-    OAuth callback (`oauth_callback` below) — so a browser landing here from an
-    emailed link ends up on the SPA's own page with a session, not looking at
-    raw JSON.
+    JSON callers (no ``redirect_url`` at request time) get a ``TokenResponse``.
+    A caller that requested a redirect gets a 302 to that URL with the token
+    pair in the fragment — the same shape as the OAuth callback — so a browser
+    arriving via the interstitial ends up on the SPA's page with a session.
     """
     try:
         async with db.acquire() as conn:
@@ -285,16 +444,34 @@ async def verify_magic_link(
 @router.get(
     "/confirm/verify",
     dependencies=[Depends(_rl_confirm)],
+    response_class=HTMLResponse,
+)
+async def signup_confirm_page(
+    token: Annotated[str, Query(description="Raw confirmation token from the email")],
+) -> Response:
+    """Side-effect-free landing page for the emailed confirmation link."""
+    async with db.acquire() as conn:
+        alive = await service.peek_one_time_token(conn, token, ["signup_confirm"])
+    if not alive:
+        return _invalid_link_page()
+    return _token_page(
+        "/auth/v1/confirm/verify", token, "Confirm your email", "Confirm"
+    )
+
+
+@router.post(
+    "/confirm/verify",
+    dependencies=[Depends(_rl_confirm)],
 )
 async def verify_signup_confirm(
     token: Annotated[str, Query(description="Raw confirmation token from the email")],
     request: Request,
 ) -> Response:
-    """Verify a signup-confirmation token and issue the first session.
+    """Consume a signup-confirmation token and issue the first session.
 
-    Same response contract as ``/magiclink/verify``: JSON ``TokenResponse`` by
-    default, or a 302 to the ``redirect_url`` given at signup/resend time with
-    the token pair in the fragment.
+    Same response contract as ``POST /magiclink/verify``: JSON
+    ``TokenResponse`` by default, or a 302 to the ``redirect_url`` given at
+    signup/resend time with the token pair in the fragment.
     """
     try:
         async with db.acquire() as conn:
@@ -332,6 +509,60 @@ async def resend_signup_confirm(payload: ConfirmResendRequest) -> None:
         # Only invalid_redirect (400) surfaces; unknown/confirmed emails stay
         # a silent 202 so the endpoint can't be used for enumeration.
         raise _auth_error(exc) from exc
+
+
+@router.get(
+    "/email_change/verify",
+    dependencies=[Depends(_rl_confirm)],
+    response_class=HTMLResponse,
+)
+async def email_change_page(
+    token: Annotated[str, Query(description="Raw email-change token from the email")],
+) -> Response:
+    """Side-effect-free landing page for either side's email-change link."""
+    async with db.acquire() as conn:
+        alive = await service.peek_one_time_token(
+            conn, token, ["email_change_current", "email_change_new"]
+        )
+    if not alive:
+        return _invalid_link_page()
+    return _token_page(
+        "/auth/v1/email_change/verify", token, "Confirm email change", "Confirm"
+    )
+
+
+@router.post(
+    "/email_change/verify",
+    dependencies=[Depends(_rl_confirm)],
+    responses={
+        202: {"description": "This side is confirmed; the other inbox's link is still pending."}
+    },
+)
+async def verify_email_change(
+    token: Annotated[str, Query(description="Raw email-change token from the email")],
+    request: Request,
+) -> Response:
+    """Consume one side of a dual-confirmation email change.
+
+    202 while the other inbox has not confirmed yet; once both sides have,
+    the change applies and a ``TokenResponse`` for the updated account is
+    returned.
+    """
+    try:
+        async with db.acquire() as conn:
+            result = await service.verify_email_change(
+                conn,
+                token,
+                ip=_client_ip_or_none(request),
+                ua=request.headers.get("user-agent"),
+            )
+    except service.AuthError as exc:
+        raise _auth_error(exc) from exc
+    if result is None:
+        return JSONResponse(
+            {"status": "pending_other_confirmation"}, status_code=202
+        )
+    return JSONResponse(jsonable_encoder(_to_token_response(*result)))
 
 
 @router.post("/otp", status_code=202, dependencies=[Depends(_rl_otp)])

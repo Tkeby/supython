@@ -77,3 +77,28 @@ async def test_reuse_writes_audit_log(client, pool):
 
     assert row is not None, "Expected an audit_log entry for token reuse"
     assert row["event"] == "refresh_token_reuse"
+
+
+async def test_refresh_tokens_are_hashed_at_rest(client, pool):
+    """The DB stores only sha256 hex digests, never the raw token."""
+    import hashlib
+
+    tokens = await _signup(client)
+    raw = tokens["refresh_token"]
+
+    async with pool.acquire() as conn:
+        stored = await conn.fetchval(
+            "select token from auth.refresh_tokens order by created_at desc limit 1"
+        )
+    assert stored != raw
+    assert stored == hashlib.sha256(raw.encode()).hexdigest()
+
+    # Rotation keeps the chain linkage in hashed form.
+    r = await _refresh(client, raw)
+    assert r.status_code == 200
+    async with pool.acquire() as conn:
+        parent = await conn.fetchval(
+            "select parent from auth.refresh_tokens where parent is not null "
+            "order by created_at desc limit 1"
+        )
+    assert parent == hashlib.sha256(raw.encode()).hexdigest()

@@ -30,10 +30,27 @@ class AuthError(Exception):
 
 
 def _row_to_user(row: asyncpg.Record) -> UserResponse:
+    """Build a UserResponse; metadata columns are optional in the row.
+
+    Rows selected inside token flows only carry id/email/created_at — their
+    UserResponse gets empty metadata, and GET /auth/v1/user stays the
+    authoritative full view.
+    """
+    keys = set(row.keys())
+
+    def _meta(col: str) -> dict[str, Any]:
+        if col not in keys or row[col] is None:
+            return {}
+        v = row[col]
+        return v if isinstance(v, dict) else json.loads(v)
+
     return UserResponse(
         id=row["id"],
         email=row["email"],
         created_at=row["created_at"],
+        user_metadata=_meta("raw_user_meta_data"),
+        app_metadata=_meta("raw_app_meta_data"),
+        new_email=row["email_change"] if "email_change" in keys else None,
     )
 
 def _sha256(value: str) -> str:
@@ -119,10 +136,12 @@ async def _issue_pair(
         user.id, user.email, extra_claims=extra or None
     )
     refresh = tokens.issue_refresh_token()
+    # Only the sha256 of the refresh token is stored (like one-time tokens),
+    # so a DB dump or backup leak does not yield live sessions.
     await conn.execute(
         "insert into auth.refresh_tokens (user_id, token) values ($1, $2)",
         user.id,
-        refresh,
+        _sha256(refresh),
     )
     return access, refresh, ttl
 
@@ -194,6 +213,30 @@ async def _consume_one_time_token(
     return row
 
 
+async def peek_one_time_token(
+    conn: asyncpg.Connection, token: str, types: list[str]
+) -> bool:
+    """True when a live (unused, unexpired) token of one of ``types`` exists.
+
+    Read-only on purpose: the GET verify pages use it to render an
+    interstitial without burning the token, so email link-scanners that
+    prefetch GETs cannot consume or trigger anything.
+    """
+    return bool(
+        await conn.fetchval(
+            """
+            select 1 from auth.one_time_tokens
+            where token_hash = $1
+              and type = any($2::text[])
+              and used_at is null
+              and expires_at > now()
+            """,
+            _sha256(token),
+            types,
+        )
+    )
+
+
 async def _mark_email_confirmed(conn: asyncpg.Connection, user_id: UUID) -> None:
     """Record proof of email ownership; coalesce keeps the first proof time."""
     await conn.execute(
@@ -238,6 +281,7 @@ async def signup(
     email: str,
     password: str,
     *,
+    data: dict[str, Any] | None = None,
     redirect_url: str | None = None,
 ) -> tuple[UserResponse, tuple[str, str, int] | None]:
     """Create a user. Returns ``(user, (access, refresh, ttl) | None)``.
@@ -245,7 +289,9 @@ async def signup(
     The pair is ``None`` when ``AUTH_REQUIRE_EMAIL_CONFIRMATION`` is on: no
     session is issued until the emailed confirmation token is verified.
     ``email_confirmed_at`` is never stamped here — it means "inbox ownership
-    proven" and signup proves nothing (see migration 0018).
+    proven" and signup proves nothing (see migration 0018). ``data`` lands in
+    user-controlled ``raw_user_meta_data``; ``raw_app_meta_data`` records the
+    signup provider and is server-controlled.
     """
     s = get_settings()
     if redirect_url is not None:
@@ -259,12 +305,16 @@ async def signup(
     pw_hash = passwords.hash_password(password)
     row = await conn.fetchrow(
         """
-        insert into auth.users (email, encrypted_password, activated_at)
-        values ($1, $2, now())
-        returning id, email, created_at
+        insert into auth.users
+            (email, encrypted_password, activated_at,
+             raw_user_meta_data, raw_app_meta_data)
+        values ($1, $2, now(), $3::jsonb, $4::jsonb)
+        returning id, email, created_at, raw_user_meta_data, raw_app_meta_data
         """,
         email,
         pw_hash,
+        json.dumps(data or {}),
+        json.dumps({"provider": "email", "providers": ["email"]}),
     )
     user = _row_to_user(row)
     if s.auth_require_email_confirmation:
@@ -326,6 +376,7 @@ async def refresh_grant(
     ip: str | None = None,
     ua: str | None = None,
 ) -> tuple[UserResponse, str, str, int]:
+    token_hash = _sha256(refresh_token)
     row = await conn.fetchrow(
         """
         select rt.id          as rt_id,
@@ -337,7 +388,7 @@ async def refresh_grant(
         join auth.users u on u.id = rt.user_id
         where rt.token = $1
         """,
-        refresh_token,
+        token_hash,
     )
     if not row:
         logger.warning("auth.refresh_grant: unknown refresh token")
@@ -363,7 +414,7 @@ async def refresh_grant(
                 set revoked = true
                 where id in (select id from descendants)
                 """,
-                refresh_token,
+                token_hash,
             )
             await _audit_log(
                 conn, row["id"], "refresh_token_reuse",
@@ -391,8 +442,8 @@ async def refresh_grant(
             "insert into auth.refresh_tokens (user_id, token, parent) "
             "values ($1, $2, $3)",
             user.id,
-            new_refresh,
-            refresh_token,
+            _sha256(new_refresh),
+            token_hash,
         )
     extra = await claims.collect(user, conn)
     access, ttl = tokens.issue_access_token(
@@ -401,18 +452,107 @@ async def refresh_grant(
     return user, access, new_refresh, ttl
 
 
-async def logout(conn: asyncpg.Connection, refresh_token: str) -> None:
-    await conn.execute(
-        "update auth.refresh_tokens set revoked = true where token = $1",
-        refresh_token,
-    )
+async def logout(
+    conn: asyncpg.Connection,
+    refresh_token: str | None = None,
+    *,
+    scope: str = "local",
+    user_id: UUID | None = None,
+    ip: str | None = None,
+    ua: str | None = None,
+) -> None:
+    """Revoke refresh tokens for a sign-out.
+
+    Scopes (GoTrue-compatible semantics):
+
+    - ``local``  — revoke the presented ``refresh_token`` and its descendant
+      chain (so logging out with an already-rotated token still kills the
+      live successor). Unknown tokens are a silent no-op: the endpoint must
+      not be a validity oracle.
+    - ``global`` — revoke every session of the user, identified by the bearer
+      access token (``user_id``) or, failing that, by ``refresh_token``.
+    - ``others`` — revoke every session of the user *except* the presented
+      ``refresh_token``'s.
+
+    Raises ``AuthError`` when the scope's required credential is missing.
+    """
+    token_row = None
+    if refresh_token is not None:
+        token_row = await conn.fetchrow(
+            "select id, user_id from auth.refresh_tokens where token = $1",
+            _sha256(refresh_token),
+        )
+
+    if scope == "local":
+        if refresh_token is None:
+            raise AuthError(
+                "invalid_request", "scope=local requires refresh_token", 400
+            )
+        if token_row is None:
+            return
+        await conn.execute(
+            """
+            with recursive chain as (
+                select id, token from auth.refresh_tokens where id = $1
+                union all
+                select rt.id, rt.token
+                from auth.refresh_tokens rt
+                join chain c on rt.parent = c.token
+            )
+            update auth.refresh_tokens
+            set revoked = true
+            where id in (select id from chain)
+            """,
+            token_row["id"],
+        )
+        return
+
+    if scope == "others" and token_row is None:
+        if refresh_token is None:
+            raise AuthError(
+                "invalid_request", "scope=others requires refresh_token", 400
+            )
+        return  # unknown token: cannot tell which session to keep; no-op
+
+    if user_id is None and token_row is not None:
+        user_id = token_row["user_id"]
+    if user_id is None:
+        raise AuthError(
+            "missing_credentials",
+            f"scope={scope} requires a valid access token or refresh_token",
+            401,
+        )
+
+    async with conn.transaction():
+        if scope == "others":
+            await conn.execute(
+                "update auth.refresh_tokens set revoked = true "
+                "where user_id = $1 and not revoked and id != $2",
+                user_id,
+                token_row["id"],
+            )
+        else:
+            await conn.execute(
+                "update auth.refresh_tokens set revoked = true "
+                "where user_id = $1 and not revoked",
+                user_id,
+            )
+        await _audit_log(
+            conn, user_id, "sign_out",
+            ip=ip, ua=ua,
+            payload={"scope": scope},
+        )
 
 
 async def get_user(
     conn: asyncpg.Connection, user_id: UUID
 ) -> UserResponse | None:
     row = await conn.fetchrow(
-        "select id, email, created_at from auth.users where id = $1",
+        """
+        select id, email, created_at,
+               raw_user_meta_data, raw_app_meta_data, email_change
+        from auth.users where id = $1
+        """,
         user_id,
     )
     return _row_to_user(row) if row else None
@@ -446,6 +586,269 @@ async def activate_user(conn: asyncpg.Connection, user_id: UUID) -> None:
         """,
         user_id,
     )
+
+
+async def update_password(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    new_password: str,
+    current_password: str | None = None,
+    *,
+    ip: str | None = None,
+    ua: str | None = None,
+) -> tuple[UserResponse, str, str, int]:
+    """Change an authenticated user's password and rotate every session.
+
+    A user with an existing password must re-prove it (``current_password``),
+    so a stolen access token alone cannot take the account over. A passwordless
+    user (OAuth-only, or an invite that never set one) may set a first password
+    with just their bearer token. All refresh tokens are revoked and a fresh
+    pair is returned — the caller keeps a session, everyone else is signed out.
+    """
+    row = await conn.fetchrow(
+        """
+        select id, email, created_at, encrypted_password
+        from auth.users where id = $1
+        """,
+        user_id,
+    )
+    if not row:
+        raise AuthError("user_not_found", "User not found", 404)
+    if row["encrypted_password"]:
+        if not current_password or not passwords.verify_password(
+            row["encrypted_password"], current_password
+        ):
+            logger.warning("auth.update_password: bad current password")
+            raise AuthError(
+                "invalid_credentials", "Current password is incorrect", 401
+            )
+    user = _row_to_user(row)
+    pw_hash = passwords.hash_password(new_password)
+    async with conn.transaction():
+        await conn.execute(
+            "update auth.users set encrypted_password = $1 where id = $2",
+            pw_hash,
+            user.id,
+        )
+        await conn.execute(
+            "update auth.refresh_tokens set revoked = true "
+            "where user_id = $1 and not revoked",
+            user.id,
+        )
+        await _audit_log(
+            conn, user.id, "password_change",
+            ip=ip, ua=ua,
+            payload={"via": "user_update", "sessions_revoked": True},
+        )
+        access, refresh, ttl = await _issue_pair(conn, user)
+    return user, access, refresh, ttl
+
+
+async def update_user_metadata(
+    conn: asyncpg.Connection, user_id: UUID, data: dict[str, Any]
+) -> UserResponse:
+    """Shallow-merge ``data`` into user-controlled raw_user_meta_data."""
+    row = await conn.fetchrow(
+        """
+        update auth.users
+        set raw_user_meta_data = raw_user_meta_data || $1::jsonb
+        where id = $2
+        returning id, email, created_at,
+                  raw_user_meta_data, raw_app_meta_data, email_change
+        """,
+        json.dumps(data),
+        user_id,
+    )
+    if not row:
+        raise AuthError("user_not_found", "User not found", 404)
+    return _row_to_user(row)
+
+
+async def request_email_change(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    new_email: str,
+    *,
+    ip: str | None = None,
+    ua: str | None = None,
+) -> None:
+    """Start a dual-confirmation email change.
+
+    Confirmation tokens go to *both* inboxes; the change only applies once
+    each side has verified (``email_change_confirm_status`` bitmask: 1 =
+    current inbox, 2 = new inbox). Requiring the current inbox too means a
+    stolen access token alone cannot re-point the account's email — the
+    same posture as ``current_password`` on password change.
+    """
+    s = get_settings()
+    row = await conn.fetchrow(
+        "select id, email from auth.users where id = $1", user_id
+    )
+    if not row:
+        raise AuthError("user_not_found", "User not found", 404)
+    if row["email"] == new_email:
+        raise AuthError(
+            "email_change_invalid", "New email matches the current one", 400
+        )
+    taken = await conn.fetchval(
+        "select 1 from auth.users where email = $1", new_email
+    )
+    if taken:
+        raise AuthError("email_taken", "Email already registered", 409)
+
+    async with conn.transaction():
+        await conn.execute(
+            """
+            update auth.users
+            set email_change = $1, email_change_confirm_status = 0
+            where id = $2
+            """,
+            new_email,
+            user_id,
+        )
+        # Delete (not mark used) superseded tokens: "used" specifically means
+        # a person clicked it, and verify relies on that distinction.
+        await conn.execute(
+            """
+            delete from auth.one_time_tokens
+            where user_id = $1
+              and type in ('email_change_current', 'email_change_new')
+            """,
+            user_id,
+        )
+        raw_current = await _store_one_time_token(
+            conn, user_id, "email_change_current", s.email_change_token_ttl
+        )
+        raw_new = await _store_one_time_token(
+            conn, user_id, "email_change_new", s.email_change_token_ttl
+        )
+        base = f"{s.site_url}/auth/v1/email_change/verify?token="
+        await mail.dispatch(
+            conn,
+            EmailMessage(
+                to=[row["email"]],
+                subject="Confirm your email change",
+                text=(
+                    f"A change of your account email to {new_email} was "
+                    f"requested. Confirm from this (current) address: "
+                    f"{base}{raw_current}"
+                ),
+            ),
+            job_name="send_auth_email",
+        )
+        await mail.dispatch(
+            conn,
+            EmailMessage(
+                to=[new_email],
+                subject="Confirm your new email",
+                text=(
+                    "Confirm this address as the new email for your account: "
+                    f"{base}{raw_new}"
+                ),
+            ),
+            job_name="send_auth_email",
+        )
+        await _audit_log(
+            conn, user_id, "email_change_requested",
+            ip=ip, ua=ua,
+            payload={"new_email": new_email},
+        )
+
+
+async def verify_email_change(
+    conn: asyncpg.Connection,
+    token: str,
+    *,
+    ip: str | None = None,
+    ua: str | None = None,
+) -> tuple[UserResponse, str, str, int] | None:
+    """Consume one side of an email change. Returns None while the other
+    side is still pending; applies the change and issues a session once both
+    inboxes have confirmed."""
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            """
+            update auth.one_time_tokens ott
+            set used_at = now()
+            from auth.users u
+            where ott.token_hash = $1
+              and ott.type in ('email_change_current', 'email_change_new')
+              and ott.used_at is null
+              and ott.expires_at > now()
+              and u.id = ott.user_id
+            returning ott.type, u.id
+            """,
+            _sha256(token),
+        )
+        if not row:
+            logger.warning("auth.verify_email_change: invalid or expired token")
+            raise AuthError("invalid_token", "Token is invalid or expired", 400)
+        # Lock the user row so two concurrent side-verifies serialize and the
+        # second one reliably observes status == 3.
+        urow = await conn.fetchrow(
+            """
+            select id, email, created_at, email_change,
+                   email_change_confirm_status,
+                   raw_user_meta_data, raw_app_meta_data
+            from auth.users where id = $1
+            for update
+            """,
+            row["id"],
+        )
+        if urow is None or urow["email_change"] is None:
+            raise AuthError("invalid_token", "No email change is pending", 400)
+
+        bit = 1 if row["type"] == "email_change_current" else 2
+        status = urow["email_change_confirm_status"] | bit
+        if status != 3:
+            await conn.execute(
+                "update auth.users set email_change_confirm_status = $1 where id = $2",
+                status,
+                urow["id"],
+            )
+            return None
+
+        new_email = urow["email_change"]
+        taken = await conn.fetchval(
+            "select 1 from auth.users where email = $1 and id != $2",
+            new_email,
+            urow["id"],
+        )
+        if taken:
+            # Someone claimed the address while the change was pending; clear
+            # the stale request rather than leave it half-confirmed forever.
+            await conn.execute(
+                """
+                update auth.users
+                set email_change = null, email_change_confirm_status = 0
+                where id = $1
+                """,
+                urow["id"],
+            )
+            raise AuthError("email_taken", "Email already registered", 409)
+
+        await conn.execute(
+            """
+            update auth.users
+            set email = $1,
+                email_change = null,
+                email_change_confirm_status = 0,
+                email_confirmed_at = now()
+            where id = $2
+            """,
+            new_email,
+            urow["id"],
+        )
+        await _audit_log(
+            conn, urow["id"], "email_change_completed",
+            ip=ip, ua=ua,
+            payload={"new_email": str(new_email)},
+        )
+        user = _row_to_user(urow).model_copy(
+            update={"email": new_email, "new_email": None}
+        )
+        access, refresh, ttl = await _issue_pair(conn, user)
+    return user, access, refresh, ttl
 
 
 async def request_recover(
@@ -490,12 +893,28 @@ async def verify_recover(
             pw_hash,
             row["id"],
         )
+        # A password reset usually means the old credential (or a session) is
+        # suspected stolen: kill every live session and every other pending
+        # recover token, so only the pair issued below survives.
+        await conn.execute(
+            "update auth.refresh_tokens set revoked = true "
+            "where user_id = $1 and not revoked",
+            user.id,
+        )
+        await conn.execute(
+            """
+            update auth.one_time_tokens
+            set used_at = now()
+            where user_id = $1 and type = 'recover' and used_at is null
+            """,
+            user.id,
+        )
         # Completing a recovery proves control of the inbox.
         await _mark_email_confirmed(conn, user.id)
         await _audit_log(
             conn, user.id, "password_change",
             ip=ip, ua=ua,
-            payload={"via": "recover"},
+            payload={"via": "recover", "sessions_revoked": True},
         )
         access, refresh, ttl = await _issue_pair(conn, user)
     return user, access, refresh, ttl
@@ -521,11 +940,14 @@ def _url_origin(url: str) -> str | None:
 def validate_magic_link_redirect(redirect_url: str, allowlist_csv: str) -> str:
     """Return ``redirect_url`` when its origin is allowlisted, else raise.
 
-    ``allowlist_csv`` is the comma-separated ``MAGIC_LINK_REDIRECT_ALLOWLIST``
-    setting. An empty allowlist rejects every redirect (the feature is off and
-    fails closed). Matching is by origin only, so any path/query/fragment under
-    an allowlisted origin is accepted. Raises ``AuthError('invalid_redirect')``
-    (400) on any miss — the caller turns that into an HTTP 400.
+    Shared origin-allowlist validator for every flow that redirects a browser
+    with tokens attached: ``allowlist_csv`` is the comma-separated
+    ``MAGIC_LINK_REDIRECT_ALLOWLIST`` (magic link / signup confirm) or
+    ``OAUTH_REDIRECT_ALLOWLIST`` (OAuth) setting. An empty allowlist rejects
+    every redirect (the feature is off and fails closed). Matching is by origin
+    only, so any path/query/fragment under an allowlisted origin is accepted.
+    Raises ``AuthError('invalid_redirect')`` (400) on any miss — the caller
+    turns that into an HTTP 400.
     """
     origin = _url_origin(redirect_url)
     if origin is None:
@@ -688,6 +1110,28 @@ async def resend_signup_confirm(
         )
 
 
+async def _record_provider_in_app_metadata(
+    conn: asyncpg.Connection, user_id: UUID, provider_name: str
+) -> None:
+    """Track a linked OAuth provider in server-controlled app_metadata."""
+    raw = await conn.fetchval(
+        "select raw_app_meta_data from auth.users where id = $1", user_id
+    )
+    meta: dict[str, Any] = (
+        raw if isinstance(raw, dict) else json.loads(raw) if raw else {}
+    )
+    providers = list(meta.get("providers") or [])
+    if provider_name not in providers:
+        providers.append(provider_name)
+    meta.setdefault("provider", provider_name)
+    meta["providers"] = providers
+    await conn.execute(
+        "update auth.users set raw_app_meta_data = $1::jsonb where id = $2",
+        json.dumps(meta),
+        user_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # OAuth
 # ---------------------------------------------------------------------------
@@ -715,6 +1159,13 @@ async def oauth_start(provider_name: str, redirect_uri: str) -> str:
     """Return the provider's authorization URL with a signed, time-limited state."""
     from .providers.registry import get_provider
 
+    # The callback ends with a 302 to redirect_uri carrying the token pair in
+    # the fragment, so it must be origin-allowlisted here — relying on the
+    # provider's registered-redirect-URI check alone leaves a token-stealing
+    # open redirect on any laxly configured provider.
+    validate_magic_link_redirect(
+        redirect_uri, get_settings().oauth_redirect_allowlist
+    )
     try:
         provider = get_provider(provider_name)
     except KeyError as exc:
@@ -771,6 +1222,12 @@ async def oauth_finish(
 
     redirect_uri: str = state_data.get("redirect_uri", "")
     code_verifier: str | None = state_data.get("v")
+
+    # Re-validate even though the state is server-signed: a state minted
+    # before an allowlist change must not outlive the tightened config.
+    validate_magic_link_redirect(
+        redirect_uri, get_settings().oauth_redirect_allowlist
+    )
 
     try:
         provider = get_provider(provider_name)
@@ -874,13 +1331,22 @@ async def oauth_finish(
                     403,
                 )
             if not user_row:
+                # Provider profile data is the user's own → user_metadata;
+                # which provider vouched for them is ours → app_metadata.
                 user_row = await conn.fetchrow(
                     """
-                    insert into auth.users (email, email_confirmed_at)
-                    values ($1, now())
-                    returning id, email, created_at
+                    insert into auth.users
+                        (email, email_confirmed_at,
+                         raw_user_meta_data, raw_app_meta_data)
+                    values ($1, now(), $2::jsonb, $3::jsonb)
+                    returning id, email, created_at,
+                              raw_user_meta_data, raw_app_meta_data
                     """,
                     profile.email,
+                    json.dumps(profile.raw),
+                    json.dumps(
+                        {"provider": provider_name, "providers": [provider_name]}
+                    ),
                 )
             user = _row_to_user(user_row)
             # The provider-verified email is proof of ownership; for a matched
@@ -900,6 +1366,7 @@ async def oauth_finish(
                 json.dumps(profile.raw),
             )
             if identity_id is not None:
+                await _record_provider_in_app_metadata(conn, user.id, provider_name)
                 await _audit_log(
                     conn, user.id, "oauth_identity_linked",
                     ip=ip, ua=ua,

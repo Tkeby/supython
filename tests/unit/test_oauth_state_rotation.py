@@ -27,6 +27,7 @@ def secretset_env(monkeypatch, tmp_path):
     monkeypatch.setenv("STORAGE_SIGNED_URL_SECRET", "")
     monkeypatch.setenv("OAUTH_STATE_SECRET", "")
     monkeypatch.setenv("SECRET_ROTATION_GRACE_SECONDS", "3600")
+    monkeypatch.setenv("OAUTH_REDIRECT_ALLOWLIST", "http://localhost")
     settings.get_settings.cache_clear()
     secretset.clear_cache()
     yield tmp_path, secrets_dir, manifest

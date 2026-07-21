@@ -69,7 +69,7 @@ async def test_magic_link_verify_stamps_email_proof(client, pool):
     await _signup(client)
     await client.post("/auth/v1/magiclink", json={"email": EMAIL})
     token = await _latest_email_token(pool)
-    r = await client.get(f"/auth/v1/magiclink/verify?token={token}")
+    r = await client.post(f"/auth/v1/magiclink/verify?token={token}")
     assert r.status_code == 200
     assert await _confirmed_at(pool) is not None
 
@@ -126,7 +126,7 @@ async def test_confirm_verify_issues_first_session(require_confirmation, client,
     await _signup(client)
     token = await _latest_email_token(pool)
 
-    r = await client.get(f"/auth/v1/confirm/verify?token={token}")
+    r = await client.post(f"/auth/v1/confirm/verify?token={token}")
     assert r.status_code == 200
     body = r.json()
     assert body["access_token"]
@@ -150,14 +150,14 @@ async def test_confirm_verify_issues_first_session(require_confirmation, client,
 async def test_confirm_token_is_single_use(require_confirmation, client, pool):
     await _signup(client)
     token = await _latest_email_token(pool)
-    assert (await client.get(f"/auth/v1/confirm/verify?token={token}")).status_code == 200
-    r = await client.get(f"/auth/v1/confirm/verify?token={token}")
+    assert (await client.post(f"/auth/v1/confirm/verify?token={token}")).status_code == 200
+    r = await client.post(f"/auth/v1/confirm/verify?token={token}")
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "invalid_token"
 
 
 async def test_confirm_verify_rejects_garbage_token(require_confirmation, client):
-    r = await client.get("/auth/v1/confirm/verify?token=not-a-real-token")
+    r = await client.post("/auth/v1/confirm/verify?token=not-a-real-token")
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "invalid_token"
 
@@ -173,7 +173,7 @@ async def test_resend_sends_new_token_and_old_still_works_flow(
     second = await _latest_email_token(pool)
     assert second is not None and second != first
 
-    r = await client.get(f"/auth/v1/confirm/verify?token={second}")
+    r = await client.post(f"/auth/v1/confirm/verify?token={second}")
     assert r.status_code == 200
 
 
@@ -190,7 +190,7 @@ async def test_resend_is_silent_for_already_confirmed(
 ):
     await _signup(client)
     token = await _latest_email_token(pool)
-    await client.get(f"/auth/v1/confirm/verify?token={token}")
+    await client.post(f"/auth/v1/confirm/verify?token={token}")
 
     r = await client.post("/auth/v1/confirm/resend", json={"email": EMAIL})
     assert r.status_code == 202

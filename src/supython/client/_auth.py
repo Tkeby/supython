@@ -36,6 +36,14 @@ class TokenResponse:
 
 
 @dataclass
+class UserUpdateResult:
+    """Result of update_user: the (possibly pending-change) user."""
+
+    user: UserResponse
+    email_change_sent_at: str | None = None
+
+
+@dataclass
 class SignUpResponse:
     """Result of sign_up.
 
@@ -159,7 +167,8 @@ class AuthClient:
     async def verify_signup(self, token: str) -> SupythonResponse[TokenResponse]:
         """Redeem an emailed signup-confirmation token for the first session."""
         try:
-            resp = await self._http.get(
+            # POST: the GET endpoint is a side-effect-free interstitial page.
+            resp = await self._http.post(
                 f"{self._url}/confirm/verify", params={"token": token}
             )
         except httpx.HTTPError as exc:
@@ -204,26 +213,123 @@ class AuthClient:
         self._emit(SIGNED_IN, session)
         return SupythonResponse(data=token_resp)
 
-    async def sign_out(self) -> SupythonResponse[None]:
+    async def sign_out(self, scope: str = "local") -> SupythonResponse[None]:
+        """Sign out. scope: "local" (this session), "global" (all sessions),
+        or "others" (all sessions except this one)."""
         refresh_token = self._client._refresh_token
-        if not refresh_token:
+        access_token = self._client._access_token
+        if not refresh_token and not access_token:
             return SupythonResponse(data=None)
 
+        body: dict[str, Any] = {"scope": scope}
+        if refresh_token:
+            body["refresh_token"] = refresh_token
+        headers = (
+            {"Authorization": f"Bearer {access_token}"} if access_token else {}
+        )
         try:
             resp = await self._http.post(
-                f"{self._url}/logout",
-                json={"refresh_token": refresh_token},
+                f"{self._url}/logout", json=body, headers=headers
             )
         except httpx.HTTPError as exc:
             return SupythonResponse(error=AuthError("network_error", str(exc), 0))
 
-        await self._clear_session()
-        self._emit(SIGNED_OUT, None)
+        if scope != "others":
+            await self._clear_session()
+            self._emit(SIGNED_OUT, None)
 
         if resp.status_code >= 400:
             return SupythonResponse(error=_make_auth_error(resp))
 
         return SupythonResponse(data=None)
+
+    async def update_password(
+        self, new_password: str, current_password: str | None = None
+    ) -> SupythonResponse[TokenResponse]:
+        """Change the signed-in user's password.
+
+        The server revokes every session and returns a fresh token pair,
+        which replaces the local session.
+        """
+        access_token = self._client._access_token
+        if not access_token:
+            return SupythonResponse(error=AuthError("no_session", "Not authenticated", 401))
+
+        body: dict[str, Any] = {"password": new_password}
+        if current_password is not None:
+            body["current_password"] = current_password
+        try:
+            resp = await self._http.put(
+                f"{self._url}/user",
+                json=body,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        except httpx.HTTPError as exc:
+            return SupythonResponse(error=AuthError("network_error", str(exc), 0))
+
+        if resp.status_code >= 400:
+            return SupythonResponse(error=_make_auth_error(resp))
+
+        token_resp = _parse_token_response(resp.json())
+        session = await self._save_session(token_resp)
+        self._emit(USER_UPDATED, session)
+        return SupythonResponse(data=token_resp)
+
+    async def update_user(
+        self,
+        *,
+        email: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> SupythonResponse[UserUpdateResult]:
+        """Start an email change (dual confirmation) and/or merge user metadata."""
+        access_token = self._client._access_token
+        if not access_token:
+            return SupythonResponse(error=AuthError("no_session", "Not authenticated", 401))
+
+        body: dict[str, Any] = {}
+        if email is not None:
+            body["email"] = email
+        if data is not None:
+            body["data"] = data
+        try:
+            resp = await self._http.put(
+                f"{self._url}/user",
+                json=body,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        except httpx.HTTPError as exc:
+            return SupythonResponse(error=AuthError("network_error", str(exc), 0))
+
+        if resp.status_code >= 400:
+            return SupythonResponse(error=_make_auth_error(resp))
+
+        payload = resp.json()
+        return SupythonResponse(
+            data=UserUpdateResult(
+                user=_parse_user_response(payload["user"]),
+                email_change_sent_at=payload.get("email_change_sent_at"),
+            )
+        )
+
+    async def verify_email_change(self, token: str) -> SupythonResponse[TokenResponse | None]:
+        """Redeem one side of an email change. data is None while the other
+        side is still pending; the completed change returns a fresh session."""
+        try:
+            resp = await self._http.post(
+                f"{self._url}/email_change/verify", params={"token": token}
+            )
+        except httpx.HTTPError as exc:
+            return SupythonResponse(error=AuthError("network_error", str(exc), 0))
+
+        if resp.status_code >= 400:
+            return SupythonResponse(error=_make_auth_error(resp))
+        if resp.status_code == 202:
+            return SupythonResponse(data=None)
+
+        token_resp = _parse_token_response(resp.json())
+        session = await self._save_session(token_resp)
+        self._emit(USER_UPDATED, session)
+        return SupythonResponse(data=token_resp)
 
     async def refresh_session(self) -> SupythonResponse[TokenResponse]:
         refresh_token = self._client._refresh_token

@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     magic_link_token_ttl: int = 15 * 60
     otp_token_ttl: int = 10 * 60
     signup_confirm_token_ttl: int = 60 * 60 * 24
+    email_change_token_ttl: int = 3600
 
     # When true, password signup returns 202 (no tokens) and sends a
     # confirmation email; sign-in is refused with `email_not_confirmed` (403)
@@ -111,6 +112,14 @@ class Settings(BaseSettings):
     auth_rate_limit_magiclink_per_window: int = 5
     auth_rate_limit_confirm_per_window: int = 5
 
+    # Comma-separated IPs/CIDRs of reverse proxies in front of supython
+    # (e.g. "10.0.0.0/8,127.0.0.1"). When the TCP peer is trusted, the client
+    # IP for rate limiting and audit logging is taken from X-Forwarded-For
+    # (rightmost address not in this list). Empty ⇒ headers are ignored and
+    # the TCP peer address is used, so a spoofed header can never influence
+    # rate-limit buckets.
+    trusted_proxies: str = ""
+
     authenticator_password: str = "authenticator"
 
     email_backend: Literal["console", "smtp"] = "console"
@@ -127,6 +136,14 @@ class Settings(BaseSettings):
     github_client_secret: str = ""
     oauth_state_secret: str | None = Field(default=None, min_length=32)
     oauth_state_max_age: int = 600
+    # Comma-separated origins (scheme://host[:port]) an OAuth `redirect_uri`
+    # may target — the callback 302s there with the token pair in the URL
+    # fragment, so an unvalidated value is a token-stealing open redirect.
+    # Empty ⇒ every redirect is refused (OAuth sign-in is effectively off
+    # until configured). Same origin-matching rules as
+    # MAGIC_LINK_REDIRECT_ALLOWLIST.
+    # Example: OAUTH_REDIRECT_ALLOWLIST=https://app.example.com,http://localhost:5173
+    oauth_redirect_allowlist: str = ""
 
     # PostgREST
     postgrest_url: str = "http://localhost:54321"

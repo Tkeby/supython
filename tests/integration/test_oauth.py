@@ -44,12 +44,18 @@ class _MockProvider(Provider):
 
 @pytest.fixture
 def mock_provider(monkeypatch):
+    from supython import settings
+
     provider = _MockProvider()
     monkeypatch.setattr(
         "supython.auth.providers.registry.get_provider",
         lambda _name: provider,
     )
-    return provider
+    monkeypatch.setenv("OAUTH_REDIRECT_ALLOWLIST", "http://localhost:3000")
+    settings.get_settings.cache_clear()
+    yield provider
+    monkeypatch.delenv("OAUTH_REDIRECT_ALLOWLIST", raising=False)
+    settings.get_settings.cache_clear()
 
 
 async def test_authorize_redirects_to_provider(client, mock_provider):
@@ -355,3 +361,65 @@ async def test_oauth_created_user_has_email_proof(client, mock_provider, pool):
             "where email = 'oauth_user@example.com'"
         )
     assert confirmed is not None
+
+
+async def test_authorize_rejects_non_allowlisted_redirect(client, mock_provider):
+    r = await client.get(
+        "/auth/v1/authorize/mock?redirect_uri=https://evil.example.com/steal"
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "invalid_redirect"
+
+
+async def test_authorize_fails_closed_with_empty_allowlist(client, monkeypatch):
+    from supython import settings
+
+    monkeypatch.setenv("OAUTH_REDIRECT_ALLOWLIST", "")
+    settings.get_settings.cache_clear()
+    try:
+        r = await client.get(
+            "/auth/v1/authorize/mock?redirect_uri=http://localhost:3000/callback"
+        )
+        assert r.status_code == 400
+        assert r.json()["detail"]["code"] == "invalid_redirect"
+    finally:
+        monkeypatch.delenv("OAUTH_REDIRECT_ALLOWLIST", raising=False)
+        settings.get_settings.cache_clear()
+
+
+async def test_oauth_created_user_has_provider_app_metadata(client, mock_provider, pool):
+    await _do_oauth_flow(client)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "select raw_user_meta_data, raw_app_meta_data from auth.users "
+            "where email = 'oauth_user@example.com'"
+        )
+    app_meta = json.loads(row["raw_app_meta_data"]) if isinstance(
+        row["raw_app_meta_data"], str
+    ) else row["raw_app_meta_data"]
+    user_meta = json.loads(row["raw_user_meta_data"]) if isinstance(
+        row["raw_user_meta_data"], str
+    ) else row["raw_user_meta_data"]
+    assert app_meta == {"provider": "mock", "providers": ["mock"]}
+    assert user_meta.get("id") == "ext_user_42"
+
+
+async def test_oauth_link_appends_provider_to_app_metadata(client, mock_provider, pool):
+    await client.post(
+        "/auth/v1/signup",
+        json={"email": "oauth_user@example.com", "password": "victim-pw123"},
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "update auth.users set email_confirmed_at = now() "
+            "where email = 'oauth_user@example.com'"
+        )
+    await _do_oauth_flow(client)
+    async with pool.acquire() as conn:
+        raw = await conn.fetchval(
+            "select raw_app_meta_data from auth.users "
+            "where email = 'oauth_user@example.com'"
+        )
+    meta = json.loads(raw) if isinstance(raw, str) else raw
+    assert meta["provider"] == "email"
+    assert set(meta["providers"]) == {"email", "mock"}

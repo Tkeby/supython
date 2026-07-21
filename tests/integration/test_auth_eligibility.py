@@ -129,7 +129,7 @@ async def test_banned_user_cannot_verify_magic_link(client, pool):
 
     await _ban(pool, email)
 
-    r = await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    r = await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
     assert r.status_code == 403, r.text
     assert r.json()["detail"]["code"] == "account_disabled"
 
@@ -199,12 +199,18 @@ class _MockProvider(Provider):
 
 @pytest.fixture
 def mock_provider(monkeypatch):
+    from supython import settings
+
     provider = _MockProvider()
     monkeypatch.setattr(
         "supython.auth.providers.registry.get_provider",
         lambda _name: provider,
     )
-    return provider
+    monkeypatch.setenv("OAUTH_REDIRECT_ALLOWLIST", "http://localhost:3000")
+    settings.get_settings.cache_clear()
+    yield provider
+    monkeypatch.delenv("OAUTH_REDIRECT_ALLOWLIST", raising=False)
+    settings.get_settings.cache_clear()
 
 
 async def _run_oauth_callback(client: httpx.AsyncClient) -> httpx.Response:
@@ -294,7 +300,7 @@ async def test_inactive_user_cannot_verify_magic_link(client, pool):
     assert payload is not None
     raw_token = payload["text"].split("?token=")[-1].strip()
 
-    r = await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    r = await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
     assert r.status_code == 403, r.text
     assert r.json()["detail"]["code"] == "account_inactive"
 
@@ -353,14 +359,14 @@ async def test_activate_user_enables_login(client, pool):
     assert payload is not None
     raw_token = payload["text"].split("?token=")[-1].strip()
 
-    blocked = await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    blocked = await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
     assert blocked.status_code == 403
     assert blocked.json()["detail"]["code"] == "account_inactive"
 
     async with pool.acquire() as conn:
         await service.activate_user(conn, uid)
 
-    allowed = await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    allowed = await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["access_token"]
 

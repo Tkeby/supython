@@ -79,3 +79,43 @@ async def test_token_endpoint_returns_429_after_threshold(
     assert third.status_code == 429
     assert third.headers["retry-after"] == "60"
     assert third.json()["detail"]["code"] == "rate_limited"
+
+
+async def test_forwarded_for_splits_buckets_behind_trusted_proxy(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the ASGI peer (127.0.0.1) trusted, X-Forwarded-For keys the bucket."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "auth_rate_limit_enabled", True)
+    monkeypatch.setattr(settings, "auth_rate_limit_token_per_window", 2)
+    monkeypatch.setattr(settings, "auth_rate_limit_window_seconds", 60)
+    monkeypatch.setattr(settings, "trusted_proxies", "127.0.0.1")
+
+    payload = {"email": "missing@example.com", "password": "wrongpassword"}
+    a = {"X-Forwarded-For": "203.0.113.5"}
+    b = {"X-Forwarded-For": "203.0.113.9"}
+
+    assert (await client.post("/auth/v1/token", json=payload, headers=a)).status_code == 401
+    assert (await client.post("/auth/v1/token", json=payload, headers=a)).status_code == 401
+    assert (await client.post("/auth/v1/token", json=payload, headers=a)).status_code == 429
+    # A different forwarded client gets its own bucket.
+    assert (await client.post("/auth/v1/token", json=payload, headers=b)).status_code == 401
+
+
+async def test_forwarded_for_ignored_when_proxies_untrusted(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without TRUSTED_PROXIES a spoofed header cannot dodge the limit."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "auth_rate_limit_enabled", True)
+    monkeypatch.setattr(settings, "auth_rate_limit_token_per_window", 2)
+    monkeypatch.setattr(settings, "auth_rate_limit_window_seconds", 60)
+    monkeypatch.setattr(settings, "trusted_proxies", "")
+
+    payload = {"email": "missing@example.com", "password": "wrongpassword"}
+    r1 = await client.post("/auth/v1/token", json=payload, headers={"X-Forwarded-For": "1.1.1.1"})
+    r2 = await client.post("/auth/v1/token", json=payload, headers={"X-Forwarded-For": "2.2.2.2"})
+    r3 = await client.post("/auth/v1/token", json=payload, headers={"X-Forwarded-For": "3.3.3.3"})
+    assert r1.status_code == 401
+    assert r2.status_code == 401
+    assert r3.status_code == 429
