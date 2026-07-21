@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     github_client_secret: str = ""
     oauth_state_secret: str | None = Field(default=None, min_length=32)
     oauth_state_max_age: int = 600
+    # Comma-separated origins (scheme://host[:port]) an OAuth `redirect_uri`
+    # may target — the callback 302s there with the token pair in the URL
+    # fragment, so an unvalidated value is a token-stealing open redirect.
+    # Empty ⇒ every redirect is refused (OAuth sign-in is effectively off
+    # until configured). Same origin-matching rules as
+    # MAGIC_LINK_REDIRECT_ALLOWLIST.
+    # Example: OAUTH_REDIRECT_ALLOWLIST=https://app.example.com,http://localhost:5173
+    oauth_redirect_allowlist: str = ""
 
     # PostgREST
     postgrest_url: str = "http://localhost:54321"

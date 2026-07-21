@@ -119,10 +119,12 @@ async def _issue_pair(
         user.id, user.email, extra_claims=extra or None
     )
     refresh = tokens.issue_refresh_token()
+    # Only the sha256 of the refresh token is stored (like one-time tokens),
+    # so a DB dump or backup leak does not yield live sessions.
     await conn.execute(
         "insert into auth.refresh_tokens (user_id, token) values ($1, $2)",
         user.id,
-        refresh,
+        _sha256(refresh),
     )
     return access, refresh, ttl
 
@@ -326,6 +328,7 @@ async def refresh_grant(
     ip: str | None = None,
     ua: str | None = None,
 ) -> tuple[UserResponse, str, str, int]:
+    token_hash = _sha256(refresh_token)
     row = await conn.fetchrow(
         """
         select rt.id          as rt_id,
@@ -337,7 +340,7 @@ async def refresh_grant(
         join auth.users u on u.id = rt.user_id
         where rt.token = $1
         """,
-        refresh_token,
+        token_hash,
     )
     if not row:
         logger.warning("auth.refresh_grant: unknown refresh token")
@@ -363,7 +366,7 @@ async def refresh_grant(
                 set revoked = true
                 where id in (select id from descendants)
                 """,
-                refresh_token,
+                token_hash,
             )
             await _audit_log(
                 conn, row["id"], "refresh_token_reuse",
@@ -391,8 +394,8 @@ async def refresh_grant(
             "insert into auth.refresh_tokens (user_id, token, parent) "
             "values ($1, $2, $3)",
             user.id,
-            new_refresh,
-            refresh_token,
+            _sha256(new_refresh),
+            token_hash,
         )
     extra = await claims.collect(user, conn)
     access, ttl = tokens.issue_access_token(
@@ -401,11 +404,96 @@ async def refresh_grant(
     return user, access, new_refresh, ttl
 
 
-async def logout(conn: asyncpg.Connection, refresh_token: str) -> None:
-    await conn.execute(
-        "update auth.refresh_tokens set revoked = true where token = $1",
-        refresh_token,
-    )
+async def logout(
+    conn: asyncpg.Connection,
+    refresh_token: str | None = None,
+    *,
+    scope: str = "local",
+    user_id: UUID | None = None,
+    ip: str | None = None,
+    ua: str | None = None,
+) -> None:
+    """Revoke refresh tokens for a sign-out.
+
+    Scopes (GoTrue-compatible semantics):
+
+    - ``local``  — revoke the presented ``refresh_token`` and its descendant
+      chain (so logging out with an already-rotated token still kills the
+      live successor). Unknown tokens are a silent no-op: the endpoint must
+      not be a validity oracle.
+    - ``global`` — revoke every session of the user, identified by the bearer
+      access token (``user_id``) or, failing that, by ``refresh_token``.
+    - ``others`` — revoke every session of the user *except* the presented
+      ``refresh_token``'s.
+
+    Raises ``AuthError`` when the scope's required credential is missing.
+    """
+    token_row = None
+    if refresh_token is not None:
+        token_row = await conn.fetchrow(
+            "select id, user_id from auth.refresh_tokens where token = $1",
+            _sha256(refresh_token),
+        )
+
+    if scope == "local":
+        if refresh_token is None:
+            raise AuthError(
+                "invalid_request", "scope=local requires refresh_token", 400
+            )
+        if token_row is None:
+            return
+        await conn.execute(
+            """
+            with recursive chain as (
+                select id, token from auth.refresh_tokens where id = $1
+                union all
+                select rt.id, rt.token
+                from auth.refresh_tokens rt
+                join chain c on rt.parent = c.token
+            )
+            update auth.refresh_tokens
+            set revoked = true
+            where id in (select id from chain)
+            """,
+            token_row["id"],
+        )
+        return
+
+    if scope == "others" and token_row is None:
+        if refresh_token is None:
+            raise AuthError(
+                "invalid_request", "scope=others requires refresh_token", 400
+            )
+        return  # unknown token: cannot tell which session to keep; no-op
+
+    if user_id is None and token_row is not None:
+        user_id = token_row["user_id"]
+    if user_id is None:
+        raise AuthError(
+            "missing_credentials",
+            f"scope={scope} requires a valid access token or refresh_token",
+            401,
+        )
+
+    async with conn.transaction():
+        if scope == "others":
+            await conn.execute(
+                "update auth.refresh_tokens set revoked = true "
+                "where user_id = $1 and not revoked and id != $2",
+                user_id,
+                token_row["id"],
+            )
+        else:
+            await conn.execute(
+                "update auth.refresh_tokens set revoked = true "
+                "where user_id = $1 and not revoked",
+                user_id,
+            )
+        await _audit_log(
+            conn, user_id, "sign_out",
+            ip=ip, ua=ua,
+            payload={"scope": scope},
+        )
 
 
 async def get_user(
@@ -446,6 +534,62 @@ async def activate_user(conn: asyncpg.Connection, user_id: UUID) -> None:
         """,
         user_id,
     )
+
+
+async def update_password(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    new_password: str,
+    current_password: str | None = None,
+    *,
+    ip: str | None = None,
+    ua: str | None = None,
+) -> tuple[UserResponse, str, str, int]:
+    """Change an authenticated user's password and rotate every session.
+
+    A user with an existing password must re-prove it (``current_password``),
+    so a stolen access token alone cannot take the account over. A passwordless
+    user (OAuth-only, or an invite that never set one) may set a first password
+    with just their bearer token. All refresh tokens are revoked and a fresh
+    pair is returned — the caller keeps a session, everyone else is signed out.
+    """
+    row = await conn.fetchrow(
+        """
+        select id, email, created_at, encrypted_password
+        from auth.users where id = $1
+        """,
+        user_id,
+    )
+    if not row:
+        raise AuthError("user_not_found", "User not found", 404)
+    if row["encrypted_password"]:
+        if not current_password or not passwords.verify_password(
+            row["encrypted_password"], current_password
+        ):
+            logger.warning("auth.update_password: bad current password")
+            raise AuthError(
+                "invalid_credentials", "Current password is incorrect", 401
+            )
+    user = _row_to_user(row)
+    pw_hash = passwords.hash_password(new_password)
+    async with conn.transaction():
+        await conn.execute(
+            "update auth.users set encrypted_password = $1 where id = $2",
+            pw_hash,
+            user.id,
+        )
+        await conn.execute(
+            "update auth.refresh_tokens set revoked = true "
+            "where user_id = $1 and not revoked",
+            user.id,
+        )
+        await _audit_log(
+            conn, user.id, "password_change",
+            ip=ip, ua=ua,
+            payload={"via": "user_update", "sessions_revoked": True},
+        )
+        access, refresh, ttl = await _issue_pair(conn, user)
+    return user, access, refresh, ttl
 
 
 async def request_recover(
@@ -490,12 +634,28 @@ async def verify_recover(
             pw_hash,
             row["id"],
         )
+        # A password reset usually means the old credential (or a session) is
+        # suspected stolen: kill every live session and every other pending
+        # recover token, so only the pair issued below survives.
+        await conn.execute(
+            "update auth.refresh_tokens set revoked = true "
+            "where user_id = $1 and not revoked",
+            user.id,
+        )
+        await conn.execute(
+            """
+            update auth.one_time_tokens
+            set used_at = now()
+            where user_id = $1 and type = 'recover' and used_at is null
+            """,
+            user.id,
+        )
         # Completing a recovery proves control of the inbox.
         await _mark_email_confirmed(conn, user.id)
         await _audit_log(
             conn, user.id, "password_change",
             ip=ip, ua=ua,
-            payload={"via": "recover"},
+            payload={"via": "recover", "sessions_revoked": True},
         )
         access, refresh, ttl = await _issue_pair(conn, user)
     return user, access, refresh, ttl
@@ -521,11 +681,14 @@ def _url_origin(url: str) -> str | None:
 def validate_magic_link_redirect(redirect_url: str, allowlist_csv: str) -> str:
     """Return ``redirect_url`` when its origin is allowlisted, else raise.
 
-    ``allowlist_csv`` is the comma-separated ``MAGIC_LINK_REDIRECT_ALLOWLIST``
-    setting. An empty allowlist rejects every redirect (the feature is off and
-    fails closed). Matching is by origin only, so any path/query/fragment under
-    an allowlisted origin is accepted. Raises ``AuthError('invalid_redirect')``
-    (400) on any miss — the caller turns that into an HTTP 400.
+    Shared origin-allowlist validator for every flow that redirects a browser
+    with tokens attached: ``allowlist_csv`` is the comma-separated
+    ``MAGIC_LINK_REDIRECT_ALLOWLIST`` (magic link / signup confirm) or
+    ``OAUTH_REDIRECT_ALLOWLIST`` (OAuth) setting. An empty allowlist rejects
+    every redirect (the feature is off and fails closed). Matching is by origin
+    only, so any path/query/fragment under an allowlisted origin is accepted.
+    Raises ``AuthError('invalid_redirect')`` (400) on any miss — the caller
+    turns that into an HTTP 400.
     """
     origin = _url_origin(redirect_url)
     if origin is None:
@@ -715,6 +878,13 @@ async def oauth_start(provider_name: str, redirect_uri: str) -> str:
     """Return the provider's authorization URL with a signed, time-limited state."""
     from .providers.registry import get_provider
 
+    # The callback ends with a 302 to redirect_uri carrying the token pair in
+    # the fragment, so it must be origin-allowlisted here — relying on the
+    # provider's registered-redirect-URI check alone leaves a token-stealing
+    # open redirect on any laxly configured provider.
+    validate_magic_link_redirect(
+        redirect_uri, get_settings().oauth_redirect_allowlist
+    )
     try:
         provider = get_provider(provider_name)
     except KeyError as exc:
@@ -771,6 +941,12 @@ async def oauth_finish(
 
     redirect_uri: str = state_data.get("redirect_uri", "")
     code_verifier: str | None = state_data.get("v")
+
+    # Re-validate even though the state is server-signed: a state minted
+    # before an allowlist change must not outlive the tightened config.
+    validate_magic_link_redirect(
+        redirect_uri, get_settings().oauth_redirect_allowlist
+    )
 
     try:
         provider = get_provider(provider_name)

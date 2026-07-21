@@ -199,12 +199,18 @@ class _MockProvider(Provider):
 
 @pytest.fixture
 def mock_provider(monkeypatch):
+    from supython import settings
+
     provider = _MockProvider()
     monkeypatch.setattr(
         "supython.auth.providers.registry.get_provider",
         lambda _name: provider,
     )
-    return provider
+    monkeypatch.setenv("OAUTH_REDIRECT_ALLOWLIST", "http://localhost:3000")
+    settings.get_settings.cache_clear()
+    yield provider
+    monkeypatch.delenv("OAUTH_REDIRECT_ALLOWLIST", raising=False)
+    settings.get_settings.cache_clear()
 
 
 async def _run_oauth_callback(client: httpx.AsyncClient) -> httpx.Response:
