@@ -9,14 +9,21 @@ from supython.auth.providers import Provider, ProviderProfile
 
 
 class _MockProvider(Provider):
-    """Deterministic provider that always returns a fixed identity."""
+    """Deterministic provider that always returns a fixed identity.
+
+    The default profile is email-verified, matching a well-behaved provider;
+    tests for the fail-closed path swap ``profile`` for an unverified one.
+    """
 
     name = "mock"
-    _PROFILE = ProviderProfile(
-        provider_user_id="ext_user_42",
-        email="oauth_user@example.com",
-        raw={"id": "ext_user_42", "email": "oauth_user@example.com"},
-    )
+
+    def __init__(self, profile: ProviderProfile | None = None) -> None:
+        self.profile = profile or ProviderProfile(
+            provider_user_id="ext_user_42",
+            email="oauth_user@example.com",
+            email_verified=True,
+            raw={"id": "ext_user_42", "email": "oauth_user@example.com"},
+        )
 
     async def authorize_url(
         self, state: str, redirect_uri: str, code_verifier: str | None = None
@@ -32,7 +39,7 @@ class _MockProvider(Provider):
     async def exchange(
         self, code: str, redirect_uri: str, code_verifier: str | None = None
     ) -> ProviderProfile:
-        return self._PROFILE
+        return self.profile
 
 
 @pytest.fixture
@@ -214,3 +221,137 @@ async def test_oauth_state_still_verifies_after_rotation_within_grace(
 
     r_cb = await client.get(f"/auth/v1/callback/mock?code=fake_code&state={state}")
     assert r_cb.status_code == 302
+
+
+# ---------------------------------------------------------------------------
+# Verified-email linking gates (pre-hijack defence)
+# ---------------------------------------------------------------------------
+
+
+async def _do_oauth_flow(client, redirect_uri="http://localhost:3000/callback"):
+    r = await client.get(f"/auth/v1/authorize/mock?redirect_uri={redirect_uri}")
+    state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+    return await client.get(f"/auth/v1/callback/mock?code=fake_code&state={state}")
+
+
+async def test_unverified_provider_email_is_refused(client, mock_provider, pool):
+    mock_provider.profile = ProviderProfile(
+        provider_user_id="ext_unverified",
+        email="unverified@example.com",
+        email_verified=False,
+        raw={},
+    )
+    r = await _do_oauth_flow(client)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "provider_email_unverified"
+
+    async with pool.acquire() as conn:
+        assert not await conn.fetchval(
+            "select 1 from auth.users where email = 'unverified@example.com'"
+        )
+        assert not await conn.fetchval(
+            "select 1 from auth.identities where provider_user_id = 'ext_unverified'"
+        )
+
+
+async def test_existing_identity_signs_in_even_if_profile_unverified(
+    client, mock_provider, pool
+):
+    """The verified-email gate guards linking/creation, not established identities."""
+    r = await _do_oauth_flow(client)
+    assert r.status_code == 302
+
+    mock_provider.profile = ProviderProfile(
+        provider_user_id="ext_user_42",
+        email="oauth_user@example.com",
+        email_verified=False,
+        raw={},
+    )
+    r = await _do_oauth_flow(client)
+    assert r.status_code == 302
+    assert "access_token=" in r.headers["location"]
+
+
+async def test_link_refused_into_unproven_password_account(client, mock_provider, pool):
+    """Pre-hijack: attacker signs up with the victim's email; the victim's later
+    OAuth sign-in must not be linked to the attacker-credentialed account."""
+    r = await client.post(
+        "/auth/v1/signup",
+        json={"email": "oauth_user@example.com", "password": "attacker-pw1"},
+    )
+    assert r.status_code == 201  # signup no longer proves the email
+
+    r = await _do_oauth_flow(client)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "email_conflict"
+
+    async with pool.acquire() as conn:
+        assert not await conn.fetchval(
+            "select 1 from auth.identities where provider_user_id = 'ext_user_42'"
+        )
+        audit = await conn.fetchrow(
+            "select payload from auth.audit_log where event = 'oauth_link_refused'"
+        )
+    assert audit is not None
+    payload = (
+        json.loads(audit["payload"])
+        if isinstance(audit["payload"], str)
+        else audit["payload"]
+    )
+    assert payload["reason"] == "unproven_email_with_password"
+
+
+async def test_link_allowed_into_proven_password_account(client, mock_provider, pool):
+    await client.post(
+        "/auth/v1/signup",
+        json={"email": "oauth_user@example.com", "password": "victim-pw123"},
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "update auth.users set email_confirmed_at = now() "
+            "where email = 'oauth_user@example.com'"
+        )
+
+    r = await _do_oauth_flow(client)
+    assert r.status_code == 302
+    assert "access_token=" in r.headers["location"]
+
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            "select count(*) from auth.users where email = 'oauth_user@example.com'"
+        )
+        assert count == 1
+        assert await conn.fetchval(
+            "select 1 from auth.identities where provider_user_id = 'ext_user_42'"
+        )
+
+
+async def test_link_allowed_into_passwordless_invite_row(client, mock_provider, pool):
+    """An operator-created invite row (no password, unproven email) may come
+    online via its first OAuth sign-in, which also stamps the email proof."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "insert into auth.users (email) values ('oauth_user@example.com')"
+        )
+
+    r = await _do_oauth_flow(client)
+    assert r.status_code == 302
+    assert "access_token=" in r.headers["location"]
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "select email_confirmed_at, activated_at from auth.users "
+            "where email = 'oauth_user@example.com'"
+        )
+    assert row["email_confirmed_at"] is not None
+    assert row["activated_at"] is not None
+
+
+async def test_oauth_created_user_has_email_proof(client, mock_provider, pool):
+    await _do_oauth_flow(client)
+    async with pool.acquire() as conn:
+        confirmed = await conn.fetchval(
+            "select email_confirmed_at from auth.users "
+            "where email = 'oauth_user@example.com'"
+        )
+    assert confirmed is not None

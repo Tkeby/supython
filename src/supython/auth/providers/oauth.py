@@ -50,6 +50,17 @@ class OAuthProvider(Provider):
             resp = await client.get(self.USERINFO_URL)
             resp.raise_for_status()
             data: dict = resp.json()
+            return await self._build_profile(client, data)
+
+    async def _build_profile(
+        self, client: AsyncOAuth2Client, data: dict
+    ) -> ProviderProfile:
+        """Turn the userinfo payload into a profile.
+
+        Runs while the authenticated ``client`` is still open so providers that
+        need extra API calls (e.g. GitHub's /user/emails) can override this
+        instead of re-implementing ``exchange``.
+        """
         return self._profile_from_userinfo(data)
 
     def _profile_from_userinfo(self, data: dict) -> ProviderProfile:

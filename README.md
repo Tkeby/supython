@@ -471,6 +471,9 @@ need any claim beyond the user UUID.
 | `AUTH_RATE_LIMIT_RECOVER_PER_WINDOW` | `3` | `/auth/v1/recover` attempts per IP/window |
 | `AUTH_RATE_LIMIT_OTP_PER_WINDOW` | `5` | `/auth/v1/otp` attempts per IP/window |
 | `AUTH_RATE_LIMIT_MAGICLINK_PER_WINDOW` | `5` | `/auth/v1/magiclink` attempts per IP/window |
+| `AUTH_RATE_LIMIT_CONFIRM_PER_WINDOW` | `5` | `/auth/v1/confirm/*` attempts per IP/window |
+| `AUTH_REQUIRE_EMAIL_CONFIRMATION` | `false` | Require new signups to confirm their email (signup returns 202 without tokens; sign-in refused with `email_not_confirmed` until `/auth/v1/confirm/verify`) |
+| `SIGNUP_CONFIRM_TOKEN_TTL` | `86400` | Signup confirmation token lifetime in seconds (24 h) |
 
 **`AUTHENTICATOR_PASSWORD`** — the password used for the `authenticator` Postgres
 role that PostgREST connects as.  Defaults to `authenticator` (matches the

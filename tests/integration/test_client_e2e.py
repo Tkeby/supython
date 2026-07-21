@@ -30,8 +30,9 @@ class TestAuthE2E:
         result = await sdk.auth.sign_up("sdk@example.com", "password1234")
         assert result.data is not None
         assert result.error is None
-        assert result.data.access_token
-        assert result.data.refresh_token
+        assert result.data.session is not None
+        assert result.data.session.access_token
+        assert result.data.session.refresh_token
         assert result.data.user.email == "sdk@example.com"
 
         result2 = await sdk.auth.sign_in_with_password("sdk@example.com", "password1234")
@@ -47,7 +48,7 @@ class TestAuthE2E:
 
     async def test_refresh_rotation(self, sdk):
         result = await sdk.auth.sign_up("refresh@example.com", "password1234")
-        old_refresh = result.data.refresh_token
+        old_refresh = result.data.session.refresh_token
 
         refresh_result = await sdk.auth.refresh_session()
         assert refresh_result.data is not None
@@ -63,7 +64,7 @@ class TestAuthE2E:
 
     async def test_refresh_reuse_detection(self, sdk):
         result = await sdk.auth.sign_up("reuse@example.com", "password1234")
-        old_refresh = result.data.refresh_token
+        old_refresh = result.data.session.refresh_token
 
         refresh_result = await sdk.auth.refresh_session()
         assert refresh_result.data is not None

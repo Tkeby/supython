@@ -21,12 +21,54 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 ## [Unreleased]
 
 ### Breaking
+- `client.auth.sign_up(...)` now resolves to a `SignUpResponse`
+  (`{user, session, confirmation_sent_at}`) instead of a bare
+  `TokenResponse`; `session` is `None` when the server requires email
+  confirmation. Read tokens via `result.data.session.access_token`.
+- OAuth sign-ins whose provider cannot vouch for the email address are
+  refused with `provider_email_unverified` (403). In particular, GitHub
+  accounts with no *verified* email can no longer sign in or link.
+
 ### Added
+- Signup email-confirmation flow (§9.2). With
+  `AUTH_REQUIRE_EMAIL_CONFIRMATION=true`, `POST /auth/v1/signup` returns
+  202 without tokens and emails a confirmation link;
+  `GET /auth/v1/confirm/verify` redeems it (optionally 302-redirecting to
+  an allowlisted `redirect_url` with the token pair in the fragment) and
+  `POST /auth/v1/confirm/resend` re-sends it. Sign-in and refresh are
+  refused with `email_not_confirmed` (403) until the address is proven.
+  New settings: `AUTH_REQUIRE_EMAIL_CONFIRMATION` (default off),
+  `SIGNUP_CONFIRM_TOKEN_TTL` (24 h),
+  `AUTH_RATE_LIMIT_CONFIRM_PER_WINDOW` (5). New `signup_confirm`
+  one-time-token type and operator-editable email template
+  (migration `0018`). Client SDK grows `auth.verify_signup(token)` and
+  `auth.resend_confirmation(email)`.
+
 ### Changed
+- `auth.users.email_confirmed_at` is now an honest "inbox ownership
+  proven" flag: stamped by signup confirmation, magic-link / OTP /
+  recovery verification, and provider-verified OAuth sign-ins — never by
+  signup itself (previously it was set unconditionally at signup). Rows
+  created before `0018` keep their old unproven stamp; see the migration
+  header for the strict-mode cleanup query.
+
 ### Deprecated
 ### Removed
 ### Fixed
+- One-time-token consumption (recover / magic link / OTP / signup
+  confirm) is now a single atomic `update … where used_at is null`,
+  closing the race where two concurrent verifies of the same token could
+  both succeed.
+
 ### Security
+- Account pre-hijack defence (pre-hijack pair, review 2026-07-21):
+  OAuth account creation and link-by-email now require a
+  provider-verified email (Google: OIDC `email_verified`; GitHub:
+  verified entry from `/user/emails`), and linking into an unproven-email
+  account that has a password is refused with `email_conflict` (403) and
+  an `oauth_link_refused` audit event. Previously an attacker could
+  pre-register a victim's email with a password and silently gain a
+  backdoor into the account the victim later created via OAuth.
 
 ---
 

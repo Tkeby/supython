@@ -77,6 +77,10 @@ async def _assert_can_authenticate(
       pre-create an ``auth.users`` row (e.g. an invite flow that provisions the
       user plus a role/membership up front) that must not authenticate until an
       explicit ``activate_user`` call; signup and OAuth sign-in activate inline.
+    - ``email_confirmed_at is null`` while ``AUTH_REQUIRE_EMAIL_CONFIRMATION``
+      is on ⇒ ``email_not_confirmed`` (403). The passwordless verifies (magic
+      link, OTP, recover, signup confirm) stamp the proof before issuing, so
+      they pass; the password grant and refresh are the paths this blocks.
 
     Gating at issuance (rather than only at password verification) means the
     check also lands on the passwordless verifies and on ``refresh_grant``, so
@@ -84,7 +88,10 @@ async def _assert_can_authenticate(
     with no token blocklist.
     """
     row = await conn.fetchrow(
-        "select banned_until, activated_at from auth.users where id = $1",
+        """
+        select banned_until, activated_at, email_confirmed_at
+        from auth.users where id = $1
+        """,
         user_id,
     )
     if row is None:
@@ -96,6 +103,11 @@ async def _assert_can_authenticate(
         raise AuthError("account_disabled", "Account is disabled", 403)
     if row["activated_at"] is None:
         raise AuthError("account_inactive", "Account is not activated", 403)
+    if (
+        get_settings().auth_require_email_confirmation
+        and row["email_confirmed_at"] is None
+    ):
+        raise AuthError("email_not_confirmed", "Email address has not been confirmed", 403)
 
 
 async def _issue_pair(
@@ -144,53 +156,100 @@ async def _store_one_time_token(
     return raw
 
 
-async def _verify_one_time_token(
+async def _consume_one_time_token(
     conn: asyncpg.Connection,
     token: str,
     token_type: str,
     email: str | None = None,
 ) -> asyncpg.Record:
-    """Return a valid, unexpired, unused token row. Raises AuthError if not found."""
-    token_hash = _sha256(token)
-    if email is not None:
-        row = await conn.fetchrow(
-            """
-            select ott.id as ott_id, ott.redirect_url, u.id, u.email, u.created_at
-            from auth.one_time_tokens ott
-            join auth.users u on u.id = ott.user_id
-            where ott.token_hash = $1
-              and ott.type = $2
-              and ott.used_at is null
-              and ott.expires_at > now()
-              and u.email = $3
-            """,
-            token_hash,
-            token_type,
-            email,
-        )
-    else:
-        row = await conn.fetchrow(
-            """
-            select ott.id as ott_id, ott.redirect_url, u.id, u.email, u.created_at
-            from auth.one_time_tokens ott
-            join auth.users u on u.id = ott.user_id
-            where ott.token_hash = $1
-              and ott.type = $2
-              and ott.used_at is null
-              and ott.expires_at > now()
-            """,
-            token_hash,
-            token_type,
-        )
+    """Atomically burn a valid, unexpired, unused token and return its row.
+
+    The single ``update ... where used_at is null`` makes consumption
+    race-free: two concurrent verifies of the same token serialize on the row
+    lock and the loser matches nothing. Call inside the caller's transaction so
+    a downstream refusal (e.g. a banned user at ``_issue_pair``) rolls the burn
+    back and the token stays usable. Raises AuthError when no live token
+    matches.
+    """
+    row = await conn.fetchrow(
+        """
+        update auth.one_time_tokens ott
+        set used_at = now()
+        from auth.users u
+        where ott.token_hash = $1
+          and ott.type = $2
+          and ott.used_at is null
+          and ott.expires_at > now()
+          and u.id = ott.user_id
+          and ($3::text is null or u.email = $3)
+        returning ott.id as ott_id, ott.redirect_url, u.id, u.email, u.created_at
+        """,
+        _sha256(token),
+        token_type,
+        email,
+    )
     if not row:
-        logger.warning("auth.verify_one_time_token: invalid or expired %s token", token_type)
+        logger.warning("auth.consume_one_time_token: invalid or expired %s token", token_type)
         raise AuthError("invalid_token", "Token is invalid or expired", 400)
     return row
 
 
+async def _mark_email_confirmed(conn: asyncpg.Connection, user_id: UUID) -> None:
+    """Record proof of email ownership; coalesce keeps the first proof time."""
+    await conn.execute(
+        """
+        update auth.users
+        set email_confirmed_at = coalesce(email_confirmed_at, now())
+        where id = $1
+        """,
+        user_id,
+    )
+
+
+async def _send_signup_confirm_email(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    email: str,
+    *,
+    redirect_url: str | None = None,
+) -> None:
+    s = get_settings()
+    raw = await _store_one_time_token(
+        conn,
+        user_id,
+        "signup_confirm",
+        s.signup_confirm_token_ttl,
+        redirect_url=redirect_url,
+    )
+    verify_url = f"{s.site_url}/auth/v1/confirm/verify?token={raw}"
+    await mail.dispatch(
+        conn,
+        EmailMessage(
+            to=[email],
+            subject="Confirm your email",
+            text=f"Click the link to confirm your email: {verify_url}",
+        ),
+        job_name="send_auth_email",
+    )
+
+
 async def signup(
-    conn: asyncpg.Connection, email: str, password: str
-) -> tuple[UserResponse, str, str, int]:
+    conn: asyncpg.Connection,
+    email: str,
+    password: str,
+    *,
+    redirect_url: str | None = None,
+) -> tuple[UserResponse, tuple[str, str, int] | None]:
+    """Create a user. Returns ``(user, (access, refresh, ttl) | None)``.
+
+    The pair is ``None`` when ``AUTH_REQUIRE_EMAIL_CONFIRMATION`` is on: no
+    session is issued until the emailed confirmation token is verified.
+    ``email_confirmed_at`` is never stamped here — it means "inbox ownership
+    proven" and signup proves nothing (see migration 0018).
+    """
+    s = get_settings()
+    if redirect_url is not None:
+        validate_magic_link_redirect(redirect_url, s.magic_link_redirect_allowlist)
     existing = await conn.fetchval(
         "select 1 from auth.users where email = $1", email
     )
@@ -200,15 +259,22 @@ async def signup(
     pw_hash = passwords.hash_password(password)
     row = await conn.fetchrow(
         """
-        insert into auth.users (email, encrypted_password, email_confirmed_at, activated_at)
-        values ($1, $2, now(), now())
+        insert into auth.users (email, encrypted_password, activated_at)
+        values ($1, $2, now())
         returning id, email, created_at
         """,
         email,
         pw_hash,
     )
     user = _row_to_user(row)
-    access, refresh, ttl = await _issue_pair(conn, user)
+    if s.auth_require_email_confirmation:
+        pair = None
+        async with conn.transaction():
+            await _send_signup_confirm_email(
+                conn, user.id, user.email, redirect_url=redirect_url
+            )
+    else:
+        pair = await _issue_pair(conn, user)
 
     try:
         from .. import db as _db
@@ -221,7 +287,7 @@ async def signup(
     except Exception:
         logger.warning("hooks: signup hook failed", exc_info=True)
 
-    return user, access, refresh, ttl
+    return user, pair
 
 
 async def password_grant(
@@ -413,19 +479,19 @@ async def verify_recover(
     ip: str | None = None,
     ua: str | None = None,
 ) -> tuple[UserResponse, str, str, int]:
-    row = await _verify_one_time_token(conn, token, "recover", email)
+    # Hash before the transaction so the argon2 work happens outside the
+    # window where the consumed token row is locked.
     pw_hash = passwords.hash_password(new_password)
-    user = _row_to_user(row)
     async with conn.transaction():
-        await conn.execute(
-            "update auth.one_time_tokens set used_at = now() where id = $1",
-            row["ott_id"],
-        )
+        row = await _consume_one_time_token(conn, token, "recover", email)
+        user = _row_to_user(row)
         await conn.execute(
             "update auth.users set encrypted_password = $1 where id = $2",
             pw_hash,
             row["id"],
         )
+        # Completing a recovery proves control of the inbox.
+        await _mark_email_confirmed(conn, user.id)
         await _audit_log(
             conn, user.id, "password_change",
             ip=ip, ua=ua,
@@ -529,13 +595,10 @@ async def request_magic_link(
 async def verify_magic_link(
     conn: asyncpg.Connection, token: str
 ) -> tuple[UserResponse, str, str, int, str | None]:
-    row = await _verify_one_time_token(conn, token, "magic_link")
-    user = _row_to_user(row)
     async with conn.transaction():
-        await conn.execute(
-            "update auth.one_time_tokens set used_at = now() where id = $1",
-            row["ott_id"],
-        )
+        row = await _consume_one_time_token(conn, token, "magic_link")
+        user = _row_to_user(row)
+        await _mark_email_confirmed(conn, user.id)
         access, refresh, ttl = await _issue_pair(conn, user)
     # redirect_url is None for legacy/JSON callers; the router 302-redirects
     # (OAuth-style, tokens in the fragment) only when it is set.
@@ -567,15 +630,62 @@ async def request_otp(
 async def verify_otp(
     conn: asyncpg.Connection, email: str, token: str
 ) -> tuple[UserResponse, str, str, int]:
-    row = await _verify_one_time_token(conn, token, "otp", email)
-    user = _row_to_user(row)
     async with conn.transaction():
-        await conn.execute(
-            "update auth.one_time_tokens set used_at = now() where id = $1",
-            row["ott_id"],
-        )
+        row = await _consume_one_time_token(conn, token, "otp", email)
+        user = _row_to_user(row)
+        await _mark_email_confirmed(conn, user.id)
         access, refresh, ttl = await _issue_pair(conn, user)
     return user, access, refresh, ttl
+
+
+async def verify_signup_confirm(
+    conn: asyncpg.Connection,
+    token: str,
+    *,
+    ip: str | None = None,
+    ua: str | None = None,
+) -> tuple[UserResponse, str, str, int, str | None]:
+    """Consume a signup-confirmation token, stamp the proof, issue a session."""
+    async with conn.transaction():
+        row = await _consume_one_time_token(conn, token, "signup_confirm")
+        user = _row_to_user(row)
+        await _mark_email_confirmed(conn, user.id)
+        await _audit_log(
+            conn, user.id, "email_confirmed",
+            ip=ip, ua=ua,
+            payload={"via": "signup_confirm"},
+        )
+        access, refresh, ttl = await _issue_pair(conn, user)
+    # Same contract as verify_magic_link: a stored redirect_url makes the
+    # router 302 with the tokens in the fragment instead of returning JSON.
+    return user, access, refresh, ttl, row["redirect_url"]
+
+
+async def resend_signup_confirm(
+    conn: asyncpg.Connection,
+    email: str,
+    *,
+    redirect_url: str | None = None,
+) -> None:
+    """Re-send the signup confirmation email.
+
+    Silently does nothing for unknown or already-confirmed emails so the
+    endpoint stays enumeration-safe (202 either way), matching request_otp /
+    request_recover. A bad redirect_url is still a 400 — it is a client error
+    regardless of whether the email exists.
+    """
+    s = get_settings()
+    if redirect_url is not None:
+        validate_magic_link_redirect(redirect_url, s.magic_link_redirect_allowlist)
+    row = await conn.fetchrow(
+        "select id, email_confirmed_at from auth.users where email = $1", email
+    )
+    if not row or row["email_confirmed_at"] is not None:
+        return
+    async with conn.transaction():
+        await _send_signup_confirm_email(
+            conn, row["id"], email, redirect_url=redirect_url
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -703,11 +813,66 @@ async def oauth_finish(
             user.id,
         )
     else:
+        # No identity yet: we are about to create an account or link to an
+        # existing one purely by email match, so the email must be one the
+        # provider actually vouches for. Fail closed on unverified profiles —
+        # this is the pre-hijack defence, not a UX nicety.
+        if not profile.email_verified:
+            logger.warning(
+                "oauth_finish: %s returned unverified email; refusing", provider_name
+            )
+            raise AuthError(
+                "provider_email_unverified",
+                "The OAuth provider could not verify this email address. "
+                "Verify the email with the provider and try again.",
+                403,
+            )
+        # Refuse to link into an account whose email was never proven but which
+        # has a password: whoever set that password may not own this inbox
+        # (account pre-hijack). Passwordless unproven rows (operator-created
+        # invites) carry no retained credential, so linking them is safe.
+        # Checked here (audit survives) and re-checked inside the transaction
+        # (closes the race with a concurrent signup).
+        conflict_id = await conn.fetchval(
+            """
+            select id from auth.users
+            where email = $1
+              and email_confirmed_at is null
+              and encrypted_password is not null
+            """,
+            profile.email,
+        )
+        if conflict_id is not None:
+            await _audit_log(
+                conn, conflict_id, "oauth_link_refused",
+                ip=ip, ua=ua,
+                payload={"provider": provider_name, "reason": "unproven_email_with_password"},
+            )
+            raise AuthError(
+                "email_conflict",
+                "An account with this email exists but its address was never "
+                "verified. Sign in with your password and confirm your email first.",
+                403,
+            )
         async with conn.transaction():
             user_row = await conn.fetchrow(
-                "select id, email, created_at from auth.users where email = $1",
+                """
+                select id, email, created_at, encrypted_password, email_confirmed_at
+                from auth.users where email = $1
+                """,
                 profile.email,
             )
+            if (
+                user_row
+                and user_row["email_confirmed_at"] is None
+                and user_row["encrypted_password"] is not None
+            ):
+                raise AuthError(
+                    "email_conflict",
+                    "An account with this email exists but its address was never "
+                    "verified. Sign in with your password and confirm your email first.",
+                    403,
+                )
             if not user_row:
                 user_row = await conn.fetchrow(
                     """
@@ -718,6 +883,9 @@ async def oauth_finish(
                     profile.email,
                 )
             user = _row_to_user(user_row)
+            # The provider-verified email is proof of ownership; for a matched
+            # passwordless invite row this is what stamps the confirmation.
+            await _mark_email_confirmed(conn, user.id)
             identity_id = await conn.fetchval(
                 """
                 insert into auth.identities

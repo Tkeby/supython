@@ -115,15 +115,47 @@ class TestAuthClient:
     def auth(self, client):
         return client.auth
 
-    async def test_sign_up_returns_token_response(self, auth):
+    async def test_sign_up_returns_session(self, auth):
         with patch.object(auth._http, "post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = _json_resp(TOKEN_BODY, 201)
             result = await auth.sign_up("test@example.com", "password1234")
         assert result.data is not None
         assert result.error is None
-        assert result.data.access_token == "at_123"
-        assert result.data.refresh_token == "rt_456"
+        assert result.data.session is not None
+        assert result.data.session.access_token == "at_123"
+        assert result.data.session.refresh_token == "rt_456"
         assert result.data.user.email == "test@example.com"
+
+    async def test_sign_up_pending_confirmation(self, client, auth):
+        pending_body = {
+            "user": TOKEN_BODY["user"],
+            "confirmation_sent_at": "2026-07-21T00:00:00+00:00",
+        }
+        with patch.object(auth._http, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = _json_resp(pending_body, 202)
+            result = await auth.sign_up("test@example.com", "password1234")
+        assert result.error is None
+        assert result.data is not None
+        assert result.data.session is None
+        assert result.data.user.email == "test@example.com"
+        assert result.data.confirmation_sent_at == "2026-07-21T00:00:00+00:00"
+        assert client._access_token is None
+
+    async def test_verify_signup_sets_session(self, client, auth):
+        with patch.object(auth._http, "get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = _json_resp(TOKEN_BODY, 200)
+            result = await auth.verify_signup("tok123")
+        assert result.error is None
+        assert result.data is not None
+        assert result.data.access_token == "at_123"
+        assert client._access_token == "at_123"
+
+    async def test_resend_confirmation_is_silent(self, auth):
+        with patch.object(auth._http, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = _json_resp(None, 202)
+            result = await auth.resend_confirmation("test@example.com")
+        assert result.error is None
+        assert result.data is None
 
     async def test_sign_up_sets_session(self, client, auth):
         with patch.object(auth._http, "post", new_callable=AsyncMock) as mock_post:
