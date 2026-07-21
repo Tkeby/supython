@@ -158,3 +158,60 @@ async def test_failed_verify_recover_writes_no_audit_log(client, pool):
             "select count(*) from auth.audit_log where event = 'password_change'"
         )
     assert count == 0
+
+
+async def test_reset_revokes_all_existing_sessions(client, pool):
+    email = "reset-revoke@example.com"
+    s1 = await _signup(client, email)
+    r = await client.post(
+        "/auth/v1/token", json={"email": email, "password": "oldpassword123"}
+    )
+    s2 = r.json()
+
+    await client.post("/auth/v1/recover", json={"email": email})
+    payload = await _get_email_payload(pool)
+    raw_token = payload["text"].split(": ")[-1].strip()
+    r = await client.post(
+        "/auth/v1/recover/verify",
+        json={"email": email, "token": raw_token, "password": "brandnewpass789"},
+    )
+    assert r.status_code == 200
+    fresh = r.json()["refresh_token"]
+
+    # Every pre-reset session is dead; the pair issued by the reset survives.
+    for dead in (s1["refresh_token"], s2["refresh_token"]):
+        rr = await client.post("/auth/v1/refresh", json={"refresh_token": dead})
+        assert rr.status_code == 401
+    rr = await client.post("/auth/v1/refresh", json={"refresh_token": fresh})
+    assert rr.status_code == 200
+
+
+async def test_reset_invalidates_other_pending_recover_tokens(client, pool):
+    email = "reset-pending@example.com"
+    await _signup(client, email)
+
+    await client.post("/auth/v1/recover", json={"email": email})
+    first = (await _get_email_payload(pool))["text"].split(": ")[-1].strip()
+    await client.post("/auth/v1/recover", json={"email": email})
+    second = (await _get_email_payload(pool))["text"].split(": ")[-1].strip()
+    assert first != second
+
+    r = await client.post(
+        "/auth/v1/recover/verify",
+        json={"email": email, "token": second, "password": "brandnewpass789"},
+    )
+    assert r.status_code == 200
+
+    # The unused first token died with the reset. Asserted in the DB rather
+    # than via a 4th HTTP call, which would trip the recover rate limit
+    # (request + verify share the auth.recover bucket, 3 per window).
+    async with pool.acquire() as conn:
+        pending = await conn.fetchval(
+            """
+            select count(*) from auth.one_time_tokens ott
+            join auth.users u on u.id = ott.user_id
+            where u.email = $1 and ott.type = 'recover' and ott.used_at is null
+            """,
+            email,
+        )
+    assert pending == 0

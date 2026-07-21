@@ -44,12 +44,18 @@ class _MockProvider(Provider):
 
 @pytest.fixture
 def mock_provider(monkeypatch):
+    from supython import settings
+
     provider = _MockProvider()
     monkeypatch.setattr(
         "supython.auth.providers.registry.get_provider",
         lambda _name: provider,
     )
-    return provider
+    monkeypatch.setenv("OAUTH_REDIRECT_ALLOWLIST", "http://localhost:3000")
+    settings.get_settings.cache_clear()
+    yield provider
+    monkeypatch.delenv("OAUTH_REDIRECT_ALLOWLIST", raising=False)
+    settings.get_settings.cache_clear()
 
 
 async def test_authorize_redirects_to_provider(client, mock_provider):
@@ -355,3 +361,27 @@ async def test_oauth_created_user_has_email_proof(client, mock_provider, pool):
             "where email = 'oauth_user@example.com'"
         )
     assert confirmed is not None
+
+
+async def test_authorize_rejects_non_allowlisted_redirect(client, mock_provider):
+    r = await client.get(
+        "/auth/v1/authorize/mock?redirect_uri=https://evil.example.com/steal"
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "invalid_redirect"
+
+
+async def test_authorize_fails_closed_with_empty_allowlist(client, monkeypatch):
+    from supython import settings
+
+    monkeypatch.setenv("OAUTH_REDIRECT_ALLOWLIST", "")
+    settings.get_settings.cache_clear()
+    try:
+        r = await client.get(
+            "/auth/v1/authorize/mock?redirect_uri=http://localhost:3000/callback"
+        )
+        assert r.status_code == 400
+        assert r.json()["detail"]["code"] == "invalid_redirect"
+    finally:
+        monkeypatch.delenv("OAUTH_REDIRECT_ALLOWLIST", raising=False)
+        settings.get_settings.cache_clear()

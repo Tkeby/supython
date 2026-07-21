@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -62,6 +62,26 @@ class TokenRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: TokenField
+
+
+class LogoutRequest(BaseModel):
+    # Optional so a bearer-only caller can do scope=global without ever having
+    # persisted its refresh token. scope semantics match GoTrue: local = this
+    # session (and its rotated descendants), global = every session, others =
+    # every session but this one.
+    refresh_token: Annotated[
+        str | None, Field(default=None, min_length=1, max_length=MAX_TOKEN_LEN)
+    ] = None
+    scope: Literal["local", "global", "others"] = "local"
+
+
+class UserUpdateRequest(BaseModel):
+    password: PasswordField
+    # Required when the account already has a password; a bearer token alone
+    # must not be enough to take over the credential.
+    current_password: Annotated[
+        str | None, Field(default=None, max_length=MAX_PASSWORD_LEN)
+    ] = None
 
 
 class TokenResponse(BaseModel):

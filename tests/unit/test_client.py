@@ -208,6 +208,46 @@ class TestAuthClient:
         assert result.data is None
         assert result.error is None
 
+    async def test_sign_out_global_sends_scope_and_bearer(self, client, auth):
+        client.set_session("at_old", "rt_old")
+        with patch.object(auth._http, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = _json_resp(None, 204)
+            result = await auth.sign_out(scope="global")
+        assert result.error is None
+        _, kwargs = mock_post.call_args
+        assert kwargs["json"] == {"scope": "global", "refresh_token": "rt_old"}
+        assert kwargs["headers"]["Authorization"] == "Bearer at_old"
+        assert client._access_token is None
+
+    async def test_sign_out_others_keeps_local_session(self, client, auth):
+        client.set_session("at_old", "rt_old")
+        with patch.object(auth._http, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = _json_resp(None, 204)
+            result = await auth.sign_out(scope="others")
+        assert result.error is None
+        assert client._access_token == "at_old"
+        assert client._refresh_token == "rt_old"
+
+    async def test_update_password_saves_new_session(self, client, auth):
+        client.set_session("at_old", "rt_old")
+        with patch.object(auth._http, "put", new_callable=AsyncMock) as mock_put:
+            mock_put.return_value = _json_resp(TOKEN_BODY, 200)
+            result = await auth.update_password("newpassword1", "oldpassword1")
+        assert result.error is None
+        assert result.data.access_token == "at_123"
+        assert client._access_token == "at_123"
+        _, kwargs = mock_put.call_args
+        assert kwargs["json"] == {
+            "password": "newpassword1",
+            "current_password": "oldpassword1",
+        }
+        assert kwargs["headers"]["Authorization"] == "Bearer at_old"
+
+    async def test_update_password_without_session(self, auth):
+        result = await auth.update_password("newpassword1")
+        assert result.error is not None
+        assert result.error.code == "no_session"
+
     async def test_refresh_session_updates_tokens(self, client, auth):
         client.set_session("at_old", "rt_old")
         new_body = {

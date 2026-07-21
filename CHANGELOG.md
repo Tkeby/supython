@@ -21,6 +21,17 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 ## [Unreleased]
 
 ### Breaking
+- OAuth `redirect_uri` must now match `OAUTH_REDIRECT_ALLOWLIST`
+  (comma-separated origins). The allowlist is empty by default, which
+  **fails closed**: OAuth sign-in returns `invalid_redirect` (400) until
+  the setting lists your app origins. Previously any `redirect_uri`
+  accepted by the provider was 302'd to with the token pair in the URL
+  fragment — a token-stealing open redirect on laxly configured
+  providers.
+- Refresh tokens are stored as sha256 hashes (migration `0019` converts
+  existing rows in place; issued raw tokens keep working). Anything that
+  read raw tokens out of `auth.refresh_tokens` directly — including the
+  admin refresh-token list — now sees digests.
 - `client.auth.sign_up(...)` now resolves to a `SignUpResponse`
   (`{user, session, confirmation_sent_at}`) instead of a bare
   `TokenResponse`; `session` is `None` when the server requires email
@@ -43,6 +54,19 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
   one-time-token type and operator-editable email template
   (migration `0018`). Client SDK grows `auth.verify_signup(token)` and
   `auth.resend_confirmation(email)`.
+- Scoped signout. `POST /auth/v1/logout` accepts
+  `{refresh_token?, scope: local|global|others}` (default `local`, wire-
+  compatible with the old body). `local` also revokes the token's rotated
+  descendants; `global` revokes every session and can be driven by the
+  bearer access token alone; `others` keeps only the presented session.
+  Global/others sign-outs write a `sign_out` audit event. Client SDK:
+  `auth.sign_out(scope=...)`.
+- `PUT /auth/v1/user` — authenticated password change. Requires
+  `current_password` when one is set (a stolen access token alone cannot
+  take over the credential); passwordless (OAuth-only/invite) accounts
+  may set a first password with just their bearer. Revokes every refresh
+  token and returns a fresh pair. Client SDK:
+  `auth.update_password(new, current)`.
 
 ### Changed
 - `auth.users.email_confirmed_at` is now an honest "inbox ownership
@@ -61,6 +85,12 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
   both succeed.
 
 ### Security
+- A successful password reset (`/auth/v1/recover/verify`) now revokes
+  every existing refresh token and every other pending recover token, so
+  a suspected-stolen session does not survive the reset. Password change
+  via `PUT /auth/v1/user` does the same.
+- Refresh tokens are hashed at rest (see Breaking) and OAuth redirect
+  targets are origin-allowlisted (see Breaking).
 - Account pre-hijack defence (pre-hijack pair, review 2026-07-21):
   OAuth account creation and link-by-email now require a
   provider-verified email (Google: OIDC `email_verified`; GitHub:

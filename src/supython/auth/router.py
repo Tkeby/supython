@@ -21,6 +21,7 @@ from ..settings import get_settings
 from . import ratelimit, service
 from .schemas import (
     ConfirmResendRequest,
+    LogoutRequest,
     MagicLinkRequest,
     OtpRequest,
     OtpVerifyRequest,
@@ -32,6 +33,7 @@ from .schemas import (
     TokenRequest,
     TokenResponse,
     UserResponse,
+    UserUpdateRequest,
 )
 
 router = APIRouter(prefix="/auth/v1", tags=["auth"])
@@ -187,9 +189,68 @@ async def refresh(payload: RefreshRequest, request: Request) -> TokenResponse:
 
 
 @router.post("/logout", status_code=204)
-async def logout(payload: RefreshRequest) -> None:
-    async with db.acquire() as conn:
-        await service.logout(conn, payload.refresh_token)
+async def logout(
+    request: Request,
+    payload: LogoutRequest | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
+    """Sign out. ``scope``: local (default) / global / others.
+
+    The bearer token, when present and valid, identifies the user for
+    ``scope=global`` without needing a refresh token. An invalid bearer is
+    ignored rather than rejected — revocation is a safe operation and the
+    refresh token in the body is an independent credential.
+    """
+    user_id: UUID | None = None
+    if authorization and authorization.lower().startswith("bearer "):
+        try:
+            claims = tokens.decode_access_token(authorization.split(" ", 1)[1])
+            user_id = UUID(claims["sub"])
+        except (jwt.PyJWTError, KeyError, ValueError):
+            user_id = None
+    body = payload or LogoutRequest()
+    try:
+        async with db.acquire() as conn:
+            await service.logout(
+                conn,
+                body.refresh_token,
+                scope=body.scope,
+                user_id=user_id,
+                ip=_client_ip_or_none(request),
+                ua=request.headers.get("user-agent"),
+            )
+    except service.AuthError as exc:
+        raise _auth_error(exc) from exc
+
+
+@router.put(
+    "/user",
+    response_model=TokenResponse,
+    dependencies=[Depends(_rl_token)],
+)
+async def update_user(
+    payload: UserUpdateRequest,
+    user_id: Annotated[UUID, Depends(_current_user_id)],
+    request: Request,
+) -> TokenResponse:
+    """Change the caller's password.
+
+    Requires ``current_password`` when one is set. Revokes every refresh
+    token and returns a fresh pair — other sessions are signed out.
+    """
+    try:
+        async with db.acquire() as conn:
+            result = await service.update_password(
+                conn,
+                user_id,
+                payload.password,
+                payload.current_password,
+                ip=_client_ip_or_none(request),
+                ua=request.headers.get("user-agent"),
+            )
+    except service.AuthError as exc:
+        raise _auth_error(exc) from exc
+    return _to_token_response(*result)
 
 
 @router.get("/user", response_model=UserResponse)
