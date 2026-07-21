@@ -385,3 +385,41 @@ async def test_authorize_fails_closed_with_empty_allowlist(client, monkeypatch):
     finally:
         monkeypatch.delenv("OAUTH_REDIRECT_ALLOWLIST", raising=False)
         settings.get_settings.cache_clear()
+
+
+async def test_oauth_created_user_has_provider_app_metadata(client, mock_provider, pool):
+    await _do_oauth_flow(client)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "select raw_user_meta_data, raw_app_meta_data from auth.users "
+            "where email = 'oauth_user@example.com'"
+        )
+    app_meta = json.loads(row["raw_app_meta_data"]) if isinstance(
+        row["raw_app_meta_data"], str
+    ) else row["raw_app_meta_data"]
+    user_meta = json.loads(row["raw_user_meta_data"]) if isinstance(
+        row["raw_user_meta_data"], str
+    ) else row["raw_user_meta_data"]
+    assert app_meta == {"provider": "mock", "providers": ["mock"]}
+    assert user_meta.get("id") == "ext_user_42"
+
+
+async def test_oauth_link_appends_provider_to_app_metadata(client, mock_provider, pool):
+    await client.post(
+        "/auth/v1/signup",
+        json={"email": "oauth_user@example.com", "password": "victim-pw123"},
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "update auth.users set email_confirmed_at = now() "
+            "where email = 'oauth_user@example.com'"
+        )
+    await _do_oauth_flow(client)
+    async with pool.acquire() as conn:
+        raw = await conn.fetchval(
+            "select raw_app_meta_data from auth.users "
+            "where email = 'oauth_user@example.com'"
+        )
+    meta = json.loads(raw) if isinstance(raw, str) else raw
+    assert meta["provider"] == "email"
+    assert set(meta["providers"]) == {"email", "mock"}

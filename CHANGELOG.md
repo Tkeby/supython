@@ -21,6 +21,12 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 ## [Unreleased]
 
 ### Breaking
+- Emailed verify links (`GET /auth/v1/{magiclink,confirm}/verify`) are now
+  side-effect-free HTML interstitials; the token is consumed by the form
+  **POST** to the same path. Mail scanners that prefetch the GET no longer
+  burn the token or (in redirect mode) receive the session. Any client
+  calling the verify endpoint directly must switch GET → POST (the bundled
+  SDK already does).
 - OAuth `redirect_uri` must now match `OAUTH_REDIRECT_ALLOWLIST`
   (comma-separated origins). The allowlist is empty by default, which
   **fails closed**: OAuth sign-in returns `invalid_redirect` (400) until
@@ -41,6 +47,25 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
   accounts with no *verified* email can no longer sign in or link.
 
 ### Added
+- Email change with dual confirmation. `PUT /auth/v1/user` with `email`
+  starts it; a confirmation link is sent to **both** the current and the
+  new address, and the change applies only once both are verified
+  (`POST /auth/v1/email_change/verify`, 202 until the second side). The
+  current-inbox requirement means a stolen access token alone cannot
+  re-point the account email. New `EMAIL_CHANGE_TOKEN_TTL` (1 h) and two
+  operator-editable templates (migration `0020`).
+- User/app metadata. `raw_user_meta_data` is now wired through: set at
+  signup via `data`, merged via `PUT /auth/v1/user` `data`, and returned
+  as `user_metadata` on the user object — user-controlled, display-only,
+  **never** an authorization input. New server-controlled
+  `raw_app_meta_data` (migration `0020`) records the auth provider(s) and
+  is surfaced as `app_metadata`. SDK: `auth.update_user(email=, data=)`,
+  `auth.verify_email_change(token)`.
+- `TRUSTED_PROXIES` — proxy-aware client-IP resolution for rate limiting
+  and audit logging. When the TCP peer is a listed proxy, the IP is taken
+  from the rightmost untrusted `X-Forwarded-For` hop; empty (default)
+  ignores the header so a spoofed value can never shift a rate-limit
+  bucket.
 - Signup email-confirmation flow (§9.2). With
   `AUTH_REQUIRE_EMAIL_CONFIRMATION=true`, `POST /auth/v1/signup` returns
   202 without tokens and emails a confirmation link;
@@ -85,6 +110,11 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
   both succeed.
 
 ### Security
+- Emailed verify links are no longer consumable by GET prefetch (see
+  Breaking) — closes the link-scanner token-burn / session-leak window.
+- `PUT /auth/v1/user` email change requires confirmation from the current
+  inbox as well as the new one, so a stolen access token cannot silently
+  hijack the account's email.
 - A successful password reset (`/auth/v1/recover/verify`) now revokes
   every existing refresh token and every other pending recover token, so
   a suspected-stolen session does not survive the reset. Password change

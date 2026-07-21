@@ -54,7 +54,7 @@ async def test_magic_link_verify_issues_token_pair(client, pool):
     msg_text = payload["text"]
     raw_token = msg_text.split("?token=")[-1].strip()
 
-    r = await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    r = await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
     assert r.status_code == 200
     body = r.json()
     assert body["access_token"]
@@ -71,15 +71,15 @@ async def test_magic_link_token_is_single_use(client, pool):
     assert payload is not None
     raw_token = payload["text"].split("?token=")[-1].strip()
 
-    await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
 
-    r = await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    r = await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "invalid_token"
 
 
 async def test_invalid_magic_link_token_returns_400(client):
-    r = await client.get("/auth/v1/magiclink/verify?token=notavalidtoken")
+    r = await client.post("/auth/v1/magiclink/verify?token=notavalidtoken")
     assert r.status_code == 400
 
 
@@ -123,7 +123,7 @@ async def test_magic_link_verify_redirects_when_requested(client, pool, monkeypa
     assert payload is not None
     raw_token = payload["text"].split("?token=")[-1].strip()
 
-    r = await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    r = await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
     assert r.status_code == 302
     location = r.headers["location"]
     assert location.startswith("http://localhost:5173/accept-invite#")
@@ -142,7 +142,7 @@ async def test_magic_link_verify_without_redirect_still_returns_json(client, poo
     assert payload is not None
     raw_token = payload["text"].split("?token=")[-1].strip()
 
-    r = await client.get(f"/auth/v1/magiclink/verify?token={raw_token}")
+    r = await client.post(f"/auth/v1/magiclink/verify?token={raw_token}")
     assert r.status_code == 200
     body = r.json()
     assert body["access_token"]
