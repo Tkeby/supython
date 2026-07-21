@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     recover_token_ttl: int = 3600
     magic_link_token_ttl: int = 15 * 60
     otp_token_ttl: int = 10 * 60
+    signup_confirm_token_ttl: int = 60 * 60 * 24
+
+    # When true, password signup returns 202 (no tokens) and sends a
+    # confirmation email; sign-in is refused with `email_not_confirmed` (403)
+    # until the address is proven. Off by default so upgrades and mailer-less
+    # dev setups keep the immediate-token signup flow.
+    auth_require_email_confirmation: bool = False
 
     # Ceiling for a per-request magic-link lifetime. A POST /auth/v1/magiclink
     # may pass its own `ttl` (e.g. a multi-day operator invite) without moving
@@ -102,6 +109,7 @@ class Settings(BaseSettings):
     auth_rate_limit_recover_per_window: int = 3
     auth_rate_limit_otp_per_window: int = 5
     auth_rate_limit_magiclink_per_window: int = 5
+    auth_rate_limit_confirm_per_window: int = 5
 
     authenticator_password: str = "authenticator"
 

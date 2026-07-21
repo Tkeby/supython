@@ -179,6 +179,7 @@ class _MockProvider(Provider):
     _PROFILE = ProviderProfile(
         provider_user_id="ext_oauth_elig",
         email="oauth-elig@example.com",
+        email_verified=True,
         raw={"id": "ext_oauth_elig", "email": "oauth-elig@example.com"},
     )
 

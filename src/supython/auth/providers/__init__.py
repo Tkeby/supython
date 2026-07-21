@@ -7,10 +7,17 @@ from typing import Any
 
 @dataclass
 class ProviderProfile:
-    """Normalised identity returned by any OAuth provider."""
+    """Normalised identity returned by any OAuth provider.
+
+    ``email_verified`` must be True only when the provider itself vouches for
+    ownership of ``email``. It defaults to False so a provider that never sets
+    it fails closed: the auth service refuses to create or link an account by
+    email on an unverified profile (pre-hijack defence).
+    """
 
     provider_user_id: str
     email: str
+    email_verified: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
 

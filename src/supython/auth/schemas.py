@@ -36,6 +36,20 @@ class UserResponse(BaseModel):
 class SignUpRequest(BaseModel):
     email: EmailField
     password: PasswordField
+    # Only meaningful when AUTH_REQUIRE_EMAIL_CONFIRMATION is on: where
+    # /auth/v1/confirm/verify should 302 the browser after confirming, tokens
+    # in the fragment (same contract as the magic-link redirect_url, validated
+    # against the same MAGIC_LINK_REDIRECT_ALLOWLIST). Omit for the JSON flow.
+    redirect_url: Annotated[
+        str | None, Field(default=None, max_length=MAX_REDIRECT_URL_LEN)
+    ] = None
+
+
+class SignUpPendingResponse(BaseModel):
+    """202 body when signup requires email confirmation: no tokens yet."""
+
+    user: UserResponse
+    confirmation_sent_at: datetime
 
 
 class TokenRequest(BaseModel):
@@ -81,6 +95,13 @@ class MagicLinkRequest(BaseModel):
     # Omit to use MAGIC_LINK_TOKEN_TTL. Lets a caller mint a longer-lived link
     # (e.g. an operator invite) without changing the global default.
     ttl: Annotated[int | None, Field(default=None, ge=1)] = None
+
+
+class ConfirmResendRequest(BaseModel):
+    email: EmailField
+    redirect_url: Annotated[
+        str | None, Field(default=None, max_length=MAX_REDIRECT_URL_LEN)
+    ] = None
 
 
 class OtpRequest(BaseModel):

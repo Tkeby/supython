@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -19,12 +20,14 @@ from .. import db, tokens
 from ..settings import get_settings
 from . import ratelimit, service
 from .schemas import (
+    ConfirmResendRequest,
     MagicLinkRequest,
     OtpRequest,
     OtpVerifyRequest,
     RecoverRequest,
     RecoverVerifyRequest,
     RefreshRequest,
+    SignUpPendingResponse,
     SignUpRequest,
     TokenRequest,
     TokenResponse,
@@ -118,6 +121,7 @@ _rl_otp = _rate_limit_dep("auth.otp", "auth_rate_limit_otp_per_window")
 _rl_magiclink = _rate_limit_dep(
     "auth.magiclink", "auth_rate_limit_magiclink_per_window"
 )
+_rl_confirm = _rate_limit_dep("auth.confirm", "auth_rate_limit_confirm_per_window")
 
 
 @router.post(
@@ -125,14 +129,34 @@ _rl_magiclink = _rate_limit_dep(
     response_model=TokenResponse,
     status_code=201,
     dependencies=[Depends(_rl_signup)],
+    responses={
+        202: {
+            "model": SignUpPendingResponse,
+            "description": "AUTH_REQUIRE_EMAIL_CONFIRMATION is on: the account "
+            "was created and a confirmation email sent; no session is issued "
+            "until /auth/v1/confirm/verify.",
+        }
+    },
 )
-async def signup(payload: SignUpRequest) -> TokenResponse:
+async def signup(payload: SignUpRequest) -> Response:
     try:
         async with db.acquire() as conn:
-            result = await service.signup(conn, payload.email, payload.password)
+            user, pair = await service.signup(
+                conn,
+                payload.email,
+                payload.password,
+                redirect_url=payload.redirect_url,
+            )
     except service.AuthError as exc:
         raise _auth_error(exc) from exc
-    return _to_token_response(*result)
+    if pair is None:
+        pending = SignUpPendingResponse(
+            user=user, confirmation_sent_at=datetime.now(UTC)
+        )
+        return JSONResponse(jsonable_encoder(pending), status_code=202)
+    return JSONResponse(
+        jsonable_encoder(_to_token_response(user, *pair)), status_code=201
+    )
 
 
 @router.post("/token", response_model=TokenResponse, dependencies=[Depends(_rl_token)])
@@ -256,6 +280,58 @@ async def verify_magic_link(
     return JSONResponse(
         jsonable_encoder(_to_token_response(user, access, refresh, ttl))
     )
+
+
+@router.get(
+    "/confirm/verify",
+    dependencies=[Depends(_rl_confirm)],
+)
+async def verify_signup_confirm(
+    token: Annotated[str, Query(description="Raw confirmation token from the email")],
+    request: Request,
+) -> Response:
+    """Verify a signup-confirmation token and issue the first session.
+
+    Same response contract as ``/magiclink/verify``: JSON ``TokenResponse`` by
+    default, or a 302 to the ``redirect_url`` given at signup/resend time with
+    the token pair in the fragment.
+    """
+    try:
+        async with db.acquire() as conn:
+            user, access, refresh, ttl, redirect_url = (
+                await service.verify_signup_confirm(
+                    conn,
+                    token,
+                    ip=_client_ip_or_none(request),
+                    ua=request.headers.get("user-agent"),
+                )
+            )
+    except service.AuthError as exc:
+        raise _auth_error(exc) from exc
+    if redirect_url:
+        fragment = (
+            f"access_token={access}"
+            f"&refresh_token={refresh}"
+            f"&expires_in={ttl}"
+            f"&token_type=bearer"
+        )
+        return RedirectResponse(f"{redirect_url}#{fragment}", status_code=302)
+    return JSONResponse(
+        jsonable_encoder(_to_token_response(user, access, refresh, ttl))
+    )
+
+
+@router.post("/confirm/resend", status_code=202, dependencies=[Depends(_rl_confirm)])
+async def resend_signup_confirm(payload: ConfirmResendRequest) -> None:
+    try:
+        async with db.acquire() as conn:
+            await service.resend_signup_confirm(
+                conn, payload.email, redirect_url=payload.redirect_url
+            )
+    except service.AuthError as exc:
+        # Only invalid_redirect (400) surfaces; unknown/confirmed emails stay
+        # a silent 202 so the endpoint can't be used for enumeration.
+        raise _auth_error(exc) from exc
 
 
 @router.post("/otp", status_code=202, dependencies=[Depends(_rl_otp)])

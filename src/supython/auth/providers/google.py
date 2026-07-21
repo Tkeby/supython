@@ -12,8 +12,12 @@ class GoogleProvider(OAuthProvider):
     DEFAULT_SCOPE = "openid email profile"
 
     def _profile_from_userinfo(self, data: dict) -> ProviderProfile:
+        # OIDC userinfo carries `email_verified`; Google may serve it as a
+        # bool or the string "true" depending on endpoint version.
+        verified = data.get("email_verified")
         return ProviderProfile(
             provider_user_id=data["sub"],
             email=data.get("email", ""),
+            email_verified=verified is True or verified == "true",
             raw=data,
         )

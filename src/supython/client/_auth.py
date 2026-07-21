@@ -36,6 +36,20 @@ class TokenResponse:
 
 
 @dataclass
+class SignUpResponse:
+    """Result of sign_up.
+
+    ``session`` is None when the server requires email confirmation
+    (HTTP 202): the account exists but no tokens are issued until
+    ``verify_signup`` (or the emailed link) completes.
+    """
+
+    user: UserResponse
+    session: TokenResponse | None = None
+    confirmation_sent_at: str | None = None
+
+
+@dataclass
 class Session:
     access_token: str
     refresh_token: str
@@ -112,7 +126,7 @@ class AuthClient:
             with contextlib.suppress(Exception):
                 cb(event, session)
 
-    async def sign_up(self, email: str, password: str) -> SupythonResponse[TokenResponse]:
+    async def sign_up(self, email: str, password: str) -> SupythonResponse[SignUpResponse]:
         try:
             resp = await self._http.post(
                 f"{self._url}/signup",
@@ -124,10 +138,52 @@ class AuthClient:
         if resp.status_code >= 400:
             return SupythonResponse(error=_make_auth_error(resp))
 
+        body = resp.json()
+        if resp.status_code == 202:
+            # Email confirmation required: account created, no session yet.
+            return SupythonResponse(
+                data=SignUpResponse(
+                    user=_parse_user_response(body["user"]),
+                    session=None,
+                    confirmation_sent_at=body.get("confirmation_sent_at"),
+                )
+            )
+
+        token_resp = _parse_token_response(body)
+        session = await self._save_session(token_resp)
+        self._emit(SIGNED_IN, session)
+        return SupythonResponse(
+            data=SignUpResponse(user=token_resp.user, session=token_resp)
+        )
+
+    async def verify_signup(self, token: str) -> SupythonResponse[TokenResponse]:
+        """Redeem an emailed signup-confirmation token for the first session."""
+        try:
+            resp = await self._http.get(
+                f"{self._url}/confirm/verify", params={"token": token}
+            )
+        except httpx.HTTPError as exc:
+            return SupythonResponse(error=AuthError("network_error", str(exc), 0))
+
+        if resp.status_code >= 400:
+            return SupythonResponse(error=_make_auth_error(resp))
+
         token_resp = _parse_token_response(resp.json())
         session = await self._save_session(token_resp)
         self._emit(SIGNED_IN, session)
         return SupythonResponse(data=token_resp)
+
+    async def resend_confirmation(self, email: str) -> SupythonResponse[None]:
+        try:
+            resp = await self._http.post(
+                f"{self._url}/confirm/resend", json={"email": email}
+            )
+        except httpx.HTTPError as exc:
+            return SupythonResponse(error=AuthError("network_error", str(exc), 0))
+
+        if resp.status_code >= 400:
+            return SupythonResponse(error=_make_auth_error(resp))
+        return SupythonResponse(data=None)
 
     async def sign_in_with_password(
         self, email: str, password: str
