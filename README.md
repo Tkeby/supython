@@ -348,19 +348,28 @@ supython dev
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/auth/v1/signup` | POST | Create account, return token pair |
+| `/auth/v1/signup` | POST | Create account; returns a token pair, or `202` + confirmation email when `AUTH_REQUIRE_EMAIL_CONFIRMATION` is on |
+| `/auth/v1/confirm/verify` | GET / POST | GET renders a confirm page; POST redeems the signup-confirmation token |
+| `/auth/v1/confirm/resend` | POST | Re-send the signup confirmation email |
 | `/auth/v1/token` | POST | Password login |
 | `/auth/v1/refresh` | POST | Rotate refresh token (reuse detection built in) |
-| `/auth/v1/logout` | POST | Revoke refresh token |
-| `/auth/v1/user` | GET | Return the caller's user (JWT required) |
+| `/auth/v1/logout` | POST | Sign out — `scope`: `local` (default) / `global` / `others` |
+| `/auth/v1/user` | GET | Return the caller's user, incl. `user_metadata` / `app_metadata` (JWT required) |
+| `/auth/v1/user` | PUT | Change password, OR start an email change / merge `data` into `user_metadata` |
+| `/auth/v1/email_change/verify` | GET / POST | Confirm one side of a dual-confirmation email change |
 | `/auth/v1/recover` | POST | Request password-reset email |
-| `/auth/v1/recover/verify` | POST | Verify reset token, set new password |
+| `/auth/v1/recover/verify` | POST | Verify reset token, set new password (revokes all sessions) |
 | `/auth/v1/magiclink` | POST | Request magic-link email |
-| `/auth/v1/magiclink/verify` | GET | Verify magic-link token (`?token=…`) |
+| `/auth/v1/magiclink/verify` | GET / POST | GET renders a confirm page; POST redeems the magic-link token |
 | `/auth/v1/otp` | POST | Request email OTP |
 | `/auth/v1/otp/verify` | POST | Verify OTP code |
-| `/auth/v1/authorize/{provider}` | GET | Start OAuth flow (redirect to provider) |
+| `/auth/v1/authorize/{provider}` | GET | Start OAuth flow (redirect to provider; `redirect_uri` must be allowlisted) |
 | `/auth/v1/callback/{provider}` | GET | Handle OAuth callback, redirect with tokens |
+
+Emailed verify links (signup confirm, magic link, email change) are
+**GET landing pages** that consume nothing — the token is redeemed by the
+form **POST** they submit, so mail-scanner GET prefetch can't burn a token
+or leak a session.
 
 **Email backend** — set `EMAIL_BACKEND=console` (default, logs to stdout) or
 `EMAIL_BACKEND=smtp` and configure `SMTP_HOST / SMTP_PORT / SMTP_USERNAME /
@@ -369,8 +378,10 @@ SMTP_PASSWORD`.
 **OAuth** — add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (and/or GitHub
 equivalents) to `.env`. Providers without credentials are silently disabled.
 
-**Logout semantics (stateless JWT)** — `/auth/v1/logout` revokes the
-**refresh** token; the access token remains valid until its `exp` claim. This
+**Logout semantics (stateless JWT)** — `/auth/v1/logout` revokes **refresh**
+tokens (`scope=local` for this session and its rotated descendants, `global`
+for all, `others` for all but this one); the access token remains valid until
+its `exp` claim. This
 is the standard stateless-JWT posture (same as Supabase Auth, Auth0, Cognito):
 both supython and PostgREST verify access tokens from the JWKS with **no
 per-request DB lookup**, so there is no place to consult a server-side

@@ -21,6 +21,20 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 ## [Unreleased]
 
 ### Breaking
+### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+### Security
+
+---
+
+## [0.1.15] — 2026-07-21
+
+Auth hardening from the GHSA security review (three stacked PRs, #10–#12).
+
+### Breaking
 - Emailed verify links (`GET /auth/v1/{magiclink,confirm}/verify`) are now
   side-effect-free HTML interstitials; the token is consumed by the form
   **POST** to the same path. Mail scanners that prefetch the GET no longer
@@ -101,8 +115,6 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
   created before `0018` keep their old unproven stamp; see the migration
   header for the strict-mode cleanup query.
 
-### Deprecated
-### Removed
 ### Fixed
 - One-time-token consumption (recover / magic link / OTP / signup
   confirm) is now a single atomic `update … where used_at is null`,
