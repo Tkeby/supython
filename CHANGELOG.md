@@ -30,6 +30,25 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ---
 
+## [0.1.16] — 2026-07-22
+
+### Fixed
+- Emailed-link interstitials (`GET /auth/v1/{confirm,magiclink,email_change}/verify`)
+  are usable in a browser again. The global CSP's `form-action 'none'`
+  blocked the form's self-POST that consumes the one-time token, so
+  clicking Confirm silently did nothing (#13). These responses now carry
+  their own scoped `Content-Security-Policy`
+  (`form-action 'self'; style-src 'unsafe-inline'`, still no `script-src`),
+  which the security-headers middleware yields to.
+
+### Changed
+- Restyled the verify interstitials and the invalid-link page: a
+  dark-mode-aware card with inline SVG status icons, replacing the
+  previous bare unstyled markup. Still fully self-contained (system
+  fonts, no external requests) to stay within the scoped CSP.
+
+---
+
 ## [0.1.15] — 2026-07-21
 
 Auth hardening from the GHSA security review (three stacked PRs, #10–#12).
