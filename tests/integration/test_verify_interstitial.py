@@ -54,6 +54,27 @@ async def test_magic_link_get_invalid_token_is_400_html(client):
     assert r.status_code == 400
     assert r.headers["content-type"].startswith("text/html")
     assert "invalid or expired" in r.text.lower()
+    # The interstitial CSP must survive on the invalid-link page too.
+    assert "form-action 'self'" in r.headers["content-security-policy"]
+
+
+async def test_interstitial_has_scoped_csp_that_allows_self_post(client, pool):
+    """The global form-action 'none' CSP would block the token-consuming POST.
+
+    The interstitial must ship its own scoped CSP so the self-POST and the
+    inline <style> work while scripts stay forbidden (see issue #13).
+    """
+    await _signup(client)
+    await client.post("/auth/v1/magiclink", json={"email": EMAIL})
+    token = await _latest_token(pool)
+
+    r = await client.get(f"/auth/v1/magiclink/verify?token={token}")
+    assert r.status_code == 200
+    csp = r.headers["content-security-policy"]
+    assert "form-action 'self'" in csp
+    assert "style-src 'unsafe-inline'" in csp
+    assert "form-action 'none'" not in csp
+    assert "script-src" not in csp
 
 
 async def test_confirm_get_is_html_and_does_not_consume(client, pool):

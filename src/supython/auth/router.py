@@ -100,7 +100,102 @@ def _client_ip_or_none(request: Request) -> str | None:
     )
 
 
-def _token_page(action_path: str, token: str, heading: str, button: str) -> HTMLResponse:
+# Scoped CSP for the emailed-link interstitial pages. Unlike the global
+# form-action 'none' policy, this permits the self-POST that consumes the token
+# and the static inline <style>, while still forbidding all scripts.
+_INTERSTITIAL_CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; "
+    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+)
+
+
+# All styling is inline in a single <style> block — the scoped CSP allows
+# 'unsafe-inline' for style but forbids scripts and every external resource
+# (no web fonts, no images), so the page must be self-contained: system fonts,
+# inline SVG icons, and prefers-color-scheme for dark mode.
+_PAGE_STYLE = """
+*{box-sizing:border-box}
+:root{
+  --bg1:#eef2ff;--bg2:#faf5ff;--card:#ffffff;--fg:#0f172a;--muted:#64748b;
+  --border:#e2e8f0;--accent:#4f46e5;--accent-hover:#4338ca;--icon-bg:#eef2ff;
+  --icon-fg:#4f46e5;--ring:rgba(79,70,229,.35)
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg1:#0b1120;--bg2:#0f172a;--card:#111827;--fg:#f1f5f9;--muted:#94a3b8;
+    --border:#1f2937;--accent:#6366f1;--accent-hover:#818cf8;--icon-bg:#1e253b;
+    --icon-fg:#a5b4fc;--ring:rgba(129,140,248,.4)
+  }
+}
+html,body{height:100%}
+body{
+  margin:0;min-height:100%;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  color:var(--fg);
+  background:radial-gradient(1200px 600px at 50% -10%,var(--bg2),var(--bg1));
+  display:flex;align-items:center;justify-content:center;padding:24px
+}
+.card{
+  width:100%;max-width:420px;background:var(--card);
+  border:1px solid var(--border);border-radius:16px;
+  padding:40px 32px;text-align:center;
+  box-shadow:0 10px 30px -12px rgba(2,6,23,.25),0 4px 8px -4px rgba(2,6,23,.1)
+}
+.icon{
+  width:64px;height:64px;margin:0 auto 24px;border-radius:50%;
+  background:var(--icon-bg);color:var(--icon-fg);
+  display:flex;align-items:center;justify-content:center
+}
+.icon svg{width:32px;height:32px}
+h1{font-size:1.4rem;line-height:1.3;margin:0 0 8px;font-weight:650}
+p{margin:0 auto;max-width:32ch;color:var(--muted);font-size:.95rem;line-height:1.5}
+form{margin:28px 0 0}
+button{
+  -webkit-appearance:none;appearance:none;cursor:pointer;
+  width:100%;font-size:1rem;font-weight:600;
+  padding:.8rem 1.4rem;border:0;border-radius:10px;
+  color:#fff;background:var(--accent);transition:background .15s ease
+}
+button:hover{background:var(--accent-hover)}
+button:focus-visible{outline:none;box-shadow:0 0 0 4px var(--ring)}
+button:active{transform:translateY(1px)}
+.footnote{margin-top:20px;font-size:.8rem;color:var(--muted)}
+"""
+
+_CHECK_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>'
+)
+_WARN_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86'
+    'a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/>'
+    '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+)
+
+
+def _shell(title: str, icon: str, body: str) -> str:
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{title}</title>
+<style>{_PAGE_STYLE}</style>
+</head><body><main class="card">
+<div class="icon">{icon}</div>
+{body}
+</main></body></html>"""
+
+
+def _token_page(
+    action_path: str,
+    token: str,
+    heading: str,
+    button: str,
+    subtitle: str,
+) -> HTMLResponse:
     """Interstitial for emailed verify links.
 
     The emailed GET must stay side-effect-free — mail scanners prefetch GETs
@@ -108,25 +203,36 @@ def _token_page(action_path: str, token: str, heading: str, button: str) -> HTML
     Consumption happens on the form POST below, which scanners don't submit.
     The token rides in the form action's query string so no body parsing
     (python-multipart) is needed.
+
+    The global CSP (form-action 'none') would block the self-POST that consumes
+    the token, so this response carries its own scoped CSP (_INTERSTITIAL_CSP):
+    still no scripts, but the form may post to itself and the inline styles
+    apply. The markup has no user-injected content (heading/button/subtitle are
+    static; token is quote()-encoded into the action), so 'unsafe-inline' for
+    style is safe. The middleware yields to any pre-set CSP header.
     """
     action = f"{action_path}?token={quote(token, safe='')}"
-    html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>{heading}</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body{{font-family:system-ui,sans-serif;display:flex;justify-content:center;padding-top:15vh;margin:0}}
-form{{text-align:center}}button{{font-size:1rem;padding:.6rem 1.4rem;cursor:pointer}}</style>
-</head><body><form method="post" action="{action}">
-<h1>{heading}</h1><button type="submit">{button}</button>
-</form></body></html>"""
-    return HTMLResponse(html)
+    body = (
+        f"<h1>{heading}</h1><p>{subtitle}</p>"
+        f'<form method="post" action="{action}">'
+        f'<button type="submit">{button}</button></form>'
+        '<div class="footnote">This link can only be used once.</div>'
+    )
+    html = _shell(heading, _CHECK_ICON, body)
+    return HTMLResponse(html, headers={"content-security-policy": _INTERSTITIAL_CSP})
 
 
 def _invalid_link_page() -> HTMLResponse:
+    body = (
+        "<h1>Link invalid or expired</h1>"
+        "<p>This link may have already been used or timed out. "
+        "Request a new one and try again.</p>"
+    )
+    html = _shell("Link invalid or expired", _WARN_ICON, body)
     return HTMLResponse(
-        "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;"
-        "text-align:center;padding-top:15vh\"><h1>Link invalid or expired</h1>"
-        "<p>Request a new one and try again.</p></body></html>",
+        html,
         status_code=400,
+        headers={"content-security-policy": _INTERSTITIAL_CSP},
     )
 
 
@@ -403,7 +509,11 @@ async def magic_link_page(
     if not alive:
         return _invalid_link_page()
     return _token_page(
-        "/auth/v1/magiclink/verify", token, "Sign in", "Continue"
+        "/auth/v1/magiclink/verify",
+        token,
+        "Sign in",
+        "Continue",
+        "Click below to finish signing in to your account.",
     )
 
 
@@ -455,7 +565,11 @@ async def signup_confirm_page(
     if not alive:
         return _invalid_link_page()
     return _token_page(
-        "/auth/v1/confirm/verify", token, "Confirm your email", "Confirm"
+        "/auth/v1/confirm/verify",
+        token,
+        "Confirm your email",
+        "Confirm",
+        "Confirm your email address to activate your account.",
     )
 
 
@@ -527,7 +641,11 @@ async def email_change_page(
     if not alive:
         return _invalid_link_page()
     return _token_page(
-        "/auth/v1/email_change/verify", token, "Confirm email change", "Confirm"
+        "/auth/v1/email_change/verify",
+        token,
+        "Confirm email change",
+        "Confirm",
+        "Confirm this address to complete your email change.",
     )
 
 
