@@ -30,6 +30,24 @@ Each entry links the relevant `PROJECT.md` section and decision-log row
 
 ---
 
+## [0.1.17] — 2026-11-03
+
+### Fixed
+- The realtime WebSocket (§9.4) now rejects a JWT whose `kid` is not in
+  the keyset instead of crashing on it. `decode_access_token` raises
+  `jwt.InvalidKeyError` for an unknown `kid`, which is a `PyJWTError`
+  but not an `InvalidTokenError`, and the WebSocket was the one caller
+  that caught only the latter. At connect, such a token failed the
+  handshake with a 500 and a logged traceback instead of being refused
+  like any other invalid token; in a `phx_join` `access_token` or an
+  `access_token` event it tore down the connection instead of getting an
+  error `phx_reply`. Any token signed by a key outside the keyset hits
+  this — one from before a key was replaced, or one from another
+  supython project's browser tab pointed at the same port. HTTP routes
+  were unaffected; they already caught `PyJWTError`.
+
+---
+
 ## [0.1.16] — 2026-07-22
 
 ### Fixed
