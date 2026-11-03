@@ -112,9 +112,13 @@ def _extract_token(ws: WebSocket) -> tuple[str | None, str | None]:
 def _decode_or_anon(token: str | None) -> tuple[str, dict[str, Any]]:
     """Decode *token* into ``(role, claims)``.
 
-    No token → ``("anon", {"role": "anon"})``.  An invalid token raises
-    :class:`jwt.InvalidTokenError` which the caller turns into a
-    1008 (policy violation) close.
+    No token → ``("anon", {"role": "anon"})``.  A bad token raises
+    :class:`jwt.PyJWTError`, which the connect path turns into a 1008
+    (policy violation) close and the in-channel paths into an error
+    ``phx_reply``.  Callers must catch ``PyJWTError``, not
+    ``InvalidTokenError``: a token signed by a key outside the keyset
+    (an unknown ``kid``) raises :class:`jwt.InvalidKeyError`, which is
+    not an ``InvalidTokenError``.
     """
     if not token:
         return "anon", dict(_ANON_CLAIMS)
@@ -196,7 +200,7 @@ async def realtime_websocket(ws: WebSocket) -> None:
     token, subprotocol_echo = _extract_token(ws)
     try:
         role, claims = _decode_or_anon(token)
-    except jwt.InvalidTokenError as exc:
+    except jwt.PyJWTError as exc:
         logger.warning("realtime: rejecting connection — invalid JWT: %s", exc)
         await ws.close(code=_WS_CLOSE_POLICY_VIOLATION, reason="invalid token")
         return
@@ -354,7 +358,7 @@ async def _handle_join(
     if payload.access_token:
         try:
             role, claims = _decode_or_anon(payload.access_token)
-        except jwt.InvalidTokenError as exc:
+        except jwt.PyJWTError as exc:
             await _reply_error(
                 ws,
                 join_ref=frame.join_ref,
@@ -450,7 +454,7 @@ async def _handle_access_token(
         return
     try:
         role, claims = _decode_or_anon(raw)
-    except jwt.InvalidTokenError as exc:
+    except jwt.PyJWTError as exc:
         await _reply_error(
             ws,
             join_ref=frame.join_ref,

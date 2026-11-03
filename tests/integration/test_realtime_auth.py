@@ -17,6 +17,7 @@ import asyncpg
 import pytest
 import pytest_asyncio
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from supython.settings import get_settings
 from tests._keys import make_expired_token, make_token, make_wrong_key_token
@@ -157,34 +158,35 @@ async def test_jwt_via_bearer_subprotocol(app):
 # ---------------------------------------------------------------------------
 
 
-async def test_invalid_token_rejected_at_connect(app):
-    """A malformed JWT in ``?apikey=`` causes the connection to be rejected."""
+def _assert_rejected_at_connect(app, token: str) -> None:
+    """The upgrade is refused with a 1008 close, not a server error.
+
+    Server exceptions stay raised: an exception escaping the endpoint is a
+    500 on the upgrade, which fails the handshake too, so asserting only
+    that *something* went wrong passes for a crash as well as a rejection.
+    """
     with (
-        TestClient(app, raise_server_exceptions=False) as client,
-        pytest.raises(Exception),  # noqa: B017
-        client.websocket_connect("/realtime/v1/websocket?vsn=1.0.0&apikey=not.a.real.token"),
+        TestClient(app) as client,
+        pytest.raises(WebSocketDisconnect) as exc_info,
+        client.websocket_connect(f"/realtime/v1/websocket?vsn=1.0.0&apikey={token}"),
     ):
         pass  # should never reach here
+    assert exc_info.value.code == 1008
+
+
+async def test_invalid_token_rejected_at_connect(app):
+    """A malformed JWT in ``?apikey=`` causes the connection to be rejected."""
+    _assert_rejected_at_connect(app, "not.a.real.token")
 
 
 async def test_wrong_key_token_rejected_at_connect(app):
-    forged = make_wrong_key_token()
-    with (
-        TestClient(app, raise_server_exceptions=False) as client,
-        pytest.raises(Exception),  # noqa: B017
-        client.websocket_connect(f"/realtime/v1/websocket?vsn=1.0.0&apikey={forged}"),
-    ):
-        pass
+    """A token whose ``kid`` is not in the keyset — e.g. one issued by another
+    supython project that used the same port — is rejected, not a 500."""
+    _assert_rejected_at_connect(app, make_wrong_key_token())
 
 
 async def test_alg_confusion_token_rejected_at_connect(app):
-    forged = _make_alg_confusion_token_realtime()
-    with (
-        TestClient(app, raise_server_exceptions=False) as client,
-        pytest.raises(Exception),  # noqa: B017
-        client.websocket_connect(f"/realtime/v1/websocket?vsn=1.0.0&apikey={forged}"),
-    ):
-        pass
+    _assert_rejected_at_connect(app, _make_alg_confusion_token_realtime())
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +208,21 @@ async def test_expired_token_in_phx_join_payload_rejected(app):
         assert reply[4]["status"] == "error"
         reason = reply[4]["response"].get("reason", "")
         assert reason  # some error message must be present
+
+
+async def test_wrong_key_token_in_phx_join_payload_rejected(app):
+    """A ``phx_join.access_token`` with an unknown ``kid`` returns status=error."""
+    forged = make_wrong_key_token()
+    with TestClient(app) as client, client.websocket_connect(
+        "/realtime/v1/websocket?vsn=1.0.0"
+    ) as ws:
+        ws.send_json(
+            ["1", "1", "realtime:private", "phx_join", {"access_token": forged, "config": {}}]
+        )
+        reply = ws.receive_json()
+        assert reply[3] == "phx_reply"
+        assert reply[4]["status"] == "error"
+        assert "unknown kid" in reply[4]["response"]["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +261,23 @@ async def test_access_token_rotation_fails_with_invalid_token(app):
         reply = ws.receive_json()
         assert reply[3] == "phx_reply"
         assert reply[4]["status"] == "error"
+
+
+async def test_access_token_rotation_fails_with_wrong_key_token(app):
+    """Rotating to a token with an unknown ``kid`` returns error, not a crash."""
+    forged = make_wrong_key_token()
+    with TestClient(app) as client, client.websocket_connect(
+        "/realtime/v1/websocket?vsn=1.0.0"
+    ) as ws:
+        ws.send_json(_join())
+        _recv_until(ws, "phx_reply")
+        ws.receive_json()  # presence_state
+
+        ws.send_json(["1", "2", "realtime:channel", "access_token", {"access_token": forged}])
+        reply = ws.receive_json()
+        assert reply[3] == "phx_reply"
+        assert reply[4]["status"] == "error"
+        assert "unknown kid" in reply[4]["response"]["reason"]
 
 
 async def test_access_token_rotation_fails_missing_field(app):
